@@ -45,11 +45,11 @@ def main() raises:
     r.post("/users", create_user)
 
     # Literal hit
-    var home_resp = r.serve(Request(method=Method.GET, url="/"))
+    var home_resp = r.serve(Request.test_get("/"))
     print("GET / →", home_resp.status, home_resp.text())
 
     # Parameter extraction
-    var u_resp = r.serve(Request(method=Method.GET, url="/users/42"))
+    var u_resp = r.serve(Request.test_get("/users/42"))
     print("GET /users/42 →", u_resp.status, u_resp.text())
 
     # POST routed to its own handler
@@ -66,7 +66,7 @@ def main() raises:
     )
 
     # Unknown path → 404
-    var nope = r.serve(Request(method=Method.GET, url="/whoami"))
+    var nope = r.serve(Request.test_get("/whoami"))
     print("GET /whoami →", nope.status)
 
     print()

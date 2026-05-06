@@ -17,7 +17,6 @@ from flare.crypto import hmac_sha256
 from flare.http import (
     CookieSessionStore,
     InMemorySessionStore,
-    Method,
     Request,
     Response,
     Cookie,
@@ -47,7 +46,7 @@ def main() raises:
     print(" cookie :", token)
 
     # Build a fake inbound Request that carries the cookie.
-    var req = Request(method=Method.GET, url="/dashboard")
+    var req = Request.test_get("/dashboard")
     req.headers.set("Cookie", String("sid=") + token)
     var s = store.load(req)
     print(" loaded :", s.value)
@@ -55,7 +54,7 @@ def main() raises:
     print()
 
     # Tampered cookies are silently anonymous (Session.empty()).
-    var bad = Request(method=Method.GET, url="/dashboard")
+    var bad = Request.test_get("/dashboard")
     bad.headers.set("Cookie", "sid=garbage.value")
     var s2 = store.load(bad)
     print(" tampered :", s2.present)
@@ -67,7 +66,7 @@ def main() raises:
     srv.insert("sid-42", "user=alice")
     var enc = srv.encode_id("sid-42")
 
-    var req2 = Request(method=Method.GET, url="/dashboard")
+    var req2 = Request.test_get("/dashboard")
     req2.headers.set("Cookie", String("flare_session=") + enc)
     var s3 = srv.load(req2)
     print(" loaded :", s3.value)

@@ -18,7 +18,6 @@ Pure construction; no live network. Run:
 from flare.http import (
     Cookie,
     Cookies,
-    Method,
     Request,
     Response,
     SameSite,
@@ -31,7 +30,7 @@ def main() raises:
 
     # ── 1. Synthesise an incoming request with two cookies ──────────────────
     print("── 1. Read cookies off Request ──")
-    var req = Request(method=Method.GET, url="/dashboard")
+    var req = Request.test_get("/dashboard")
     req.headers.set("Cookie", "session=abc123; theme=dark")
     var jar = req.cookies()
     print(" jar size :", jar.len())

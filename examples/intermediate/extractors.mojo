@@ -28,7 +28,6 @@ Run:
 from flare.http import (
     Request,
     Response,
-    Method,
     Status,
     ok,
     PathInt,
@@ -91,13 +90,13 @@ def main() raises:
     print("=" * 60)
 
     # Shape 1 — drive list_user_posts with synthesised requests.
-    var r1 = Request(method=Method.GET, url="/users/7/posts?page=2")
+    var r1 = Request.test_get("/users/7/posts?page=2")
     r1.params_mut()["id"] = "7"
     print("GET /users/7/posts?page=2 →", end=" ")
     var resp1 = list_user_posts(r1)
     print(resp1.status, resp1.text())
 
-    var r2 = Request(method=Method.GET, url="/users/9/posts")
+    var r2 = Request.test_get("/users/9/posts")
     r2.params_mut()["id"] = "9"
     print("GET /users/9/posts →", end=" ")
     var resp2 = list_user_posts(r2)
@@ -112,7 +111,7 @@ def main() raises:
     var router = Router()
     router.get[Extracted[GetUser]]("/users/:id", Extracted[GetUser]())
 
-    var r3 = Request(method=Method.GET, url="/users/42?trace=req-abc")
+    var r3 = Request.test_get("/users/42?trace=req-abc")
     r3.headers.set("Authorization", "Bearer secret")
     var resp3 = router.serve(r3)
     print("router GET /users/42 ok →", resp3.status, resp3.text())
@@ -120,7 +119,7 @@ def main() raises:
     # Error path: GET /users/abc → ParamInt rejects "abc" → 400.
     # ``expose_errors`` defaults False on synthesised requests so
     # the body is the fixed "Bad Request" string.
-    var bad = Request(method=Method.GET, url="/users/abc?trace=x")
+    var bad = Request.test_get("/users/abc?trace=x")
     bad.headers.set("Authorization", "Bearer x")
     var bad_resp = router.serve(bad)
     print("router GET /users/abc err →", bad_resp.status, bad_resp.text())

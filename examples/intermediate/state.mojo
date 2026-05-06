@@ -17,7 +17,6 @@ from flare.http import (
     Handler,
     Request,
     Response,
-    Method,
     ok,
 )
 
@@ -68,12 +67,12 @@ def main() raises:
     # state snapshot and injects it into every response.
     var serve_tree = _ObserveHits(app^, view^)
 
-    var resp = serve_tree.serve(Request(method=Method.GET, url="/"))
+    var resp = serve_tree.serve(Request.test_get("/"))
     print("GET / →", resp.status, resp.text())
     print(" X-Hits: ", resp.headers.get("X-Hits"))
     print(" X-Misses: ", resp.headers.get("X-Misses"))
 
-    var resp2 = serve_tree.serve(Request(method=Method.GET, url="/details"))
+    var resp2 = serve_tree.serve(Request.test_get("/details"))
     print("GET /details →", resp2.status, resp2.text())
     print(" X-Hits: ", resp2.headers.get("X-Hits"))
 

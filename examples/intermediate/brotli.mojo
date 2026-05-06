@@ -13,7 +13,6 @@ from flare.http import (
     Compress,
     Encoding,
     Handler,
-    Method,
     Request,
     Response,
     compress_brotli,
@@ -69,7 +68,7 @@ def main() raises:
 
     print("── 3. Compress middleware emits br ──")
     var stack = Compress(LargeText(), min_size_bytes=512)
-    var req = Request(method=Method.GET, url="/")
+    var req = Request.test_get("/")
     req.headers.set("Accept-Encoding", "gzip;q=0.5, br;q=0.95")
     var resp = stack.serve(req)
     print(" status :", resp.status)

@@ -121,7 +121,7 @@ def main() raises:
         r.get("/user/:id", fallible_user_lookup)                           # shape 3
         srv.serve(r^)
     """
-    var req = Request(method="GET", url="/health", version="HTTP/1.1")
+    var req = Request.test_get("/health")
 
     var hr = health(req)
     print("health (bare fn):  status=", hr.status, "body=", hr.text())

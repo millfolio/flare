@@ -38,7 +38,6 @@ from flare.http import (
     Router,
     Request,
     Response,
-    Method,
     Status,
     ok,
     not_found,
@@ -87,13 +86,13 @@ def main() raises:
 
     # 3. Drive the router with a synthesised request to prove the
     # routing graph each worker would run is correctly wired.
-    var r1 = router.serve(Request(method=Method.GET, url="/"))
+    var r1 = router.serve(Request.test_get("/"))
     print(" routed GET / →", r1.status, r1.text())
-    var r2 = router.serve(Request(method=Method.GET, url="/users/42"))
+    var r2 = router.serve(Request.test_get("/users/42"))
     print(" routed GET /users/42 →", r2.status, r2.text())
-    var r3 = router.serve(Request(method=Method.GET, url="/health"))
+    var r3 = router.serve(Request.test_get("/health"))
     print(" routed GET /health →", r3.status, r3.text())
-    var r4 = router.serve(Request(method=Method.GET, url="/missing"))
+    var r4 = router.serve(Request.test_get("/missing"))
     print(" routed GET /missing →", r4.status)
 
     # 4. Bind an HttpServer (port 0 = auto-assign) and close it. A

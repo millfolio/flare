@@ -168,6 +168,60 @@ struct Request(Movable):
             p.destroy_pointee()
             p.free()
 
+    @staticmethod
+    def test_get(url: String) -> Request:
+        """Construct a GET request for cookbook examples and unit tests.
+
+        Equivalent to ``Request(method=Method.GET, url=url)`` but
+        spells the intent without re-stating the keyword arg trio.
+        Defaults: empty body, ``HTTP/1.1``, ``127.0.0.1:0`` peer,
+        ``expose_errors=False``, no TLS info.
+
+        Args:
+            url: Request target (path + optional query string).
+
+        Returns:
+            A ready-to-route GET request.
+        """
+        return Request(method=Method.GET, url=url)
+
+    @staticmethod
+    def test_post(
+        url: String,
+        body: String,
+        content_type: String = "application/octet-stream",
+    ) raises -> Request:
+        """Construct a POST request with a string body.
+
+        Convenience factory for cookbook examples and unit tests
+        that want to drive an extractor / handler with a synthetic
+        body without writing the
+        ``Request(method="POST", url=url, version="HTTP/1.1")`` +
+        per-byte ``body.append(...)`` loop the synthetic-request
+        shape used to require.
+
+        Args:
+            url: Request target (path + optional query string).
+            body: Body bytes as a UTF-8 ``String``. Empty string
+                is fine.
+            content_type: Value for the ``Content-Type`` header.
+                Defaults to ``"application/octet-stream"``; pass
+                ``"application/json"`` for JSON bodies and
+                ``"application/x-www-form-urlencoded"`` for form
+                bodies.
+
+        Returns:
+            A ready-to-route POST request with the body bytes
+            and a ``Content-Type`` header.
+        """
+        var body_bytes = List[UInt8]()
+        var bb = body.as_bytes()
+        for i in range(len(bb)):
+            body_bytes.append(bb[i])
+        var req = Request(method=Method.POST, url=url, body=body_bytes^)
+        req.headers.set("Content-Type", content_type)
+        return req^
+
     def has_params(self) -> Bool:
         """Return True if a ``Router`` populated this request's path params."""
         return Bool(self._params)

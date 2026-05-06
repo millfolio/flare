@@ -51,9 +51,11 @@ def main() raises:
 
     # ── 3. Form extractor (typical /login handler shape) ───────────────────
     print("── 3. Form extractor ──")
-    var req = Request(method=Method.POST, url="/login")
-    req.headers.set("Content-Type", "application/x-www-form-urlencoded")
-    req.body = List[UInt8]("user=alice&pw=secret".as_bytes())
+    var req = Request.test_post(
+        "/login",
+        "user=alice&pw=secret",
+        content_type="application/x-www-form-urlencoded",
+    )
     var form = Form.extract(req)
     print(" user :", form.value.get("user"))
     print(" pw :", form.value.get("pw"))

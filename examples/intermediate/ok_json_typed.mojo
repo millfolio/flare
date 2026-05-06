@@ -57,12 +57,9 @@ def main() raises:
 
     # Build a fake request to demonstrate the typed pipeline without
     # needing a live network.
-    var fake = Request(method="POST", url="/echo", version="HTTP/1.1")
-    fake.headers.set("Content-Type", "application/json")
-    var body_str = String('{"id":42,"name":"alice"}')
-    var bb = body_str.as_bytes()
-    for i in range(len(bb)):
-        fake.body.append(bb[i])
+    var fake = Request.test_post(
+        "/echo", '{"id":42,"name":"alice"}', content_type="application/json"
+    )
 
     var resp = echo_json(fake^)
     print("status:", resp.status)

@@ -19,7 +19,6 @@ from flare.http import (
     Handler,
     HeaderMap,
     Logger,
-    Method,
     Request,
     RequestId,
     Response,
@@ -79,7 +78,7 @@ def main() raises:
 
     # ── 2. Inbound request with Accept-Encoding: gzip ────────────────────
     print("── 2. Stack response (gzip) ──")
-    var req = Request(method=Method.GET, url="/")
+    var req = Request.test_get("/")
     req.headers.set("Accept-Encoding", "gzip, br;q=0.0")
     req.headers.set("X-Request-Id", "demo-req-42")
     var resp = stack.serve(req)
@@ -94,7 +93,7 @@ def main() raises:
 
     # ── 3. Identity request (no Accept-Encoding) ──────────────────────────
     print("── 3. Stack response (identity) ──")
-    var req2 = Request(method=Method.GET, url="/")
+    var req2 = Request.test_get("/")
     var resp2 = stack.serve(req2)
     print(" status :", resp2.status)
     print(" Content-Encoding:", resp2.headers.get("content-encoding"))

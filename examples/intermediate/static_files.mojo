@@ -46,7 +46,7 @@ def main() raises:
     var fs = FileServer.new(root)
 
     print("── 1. GET /index.html ──")
-    var req = Request(method=Method.GET, url="/index.html")
+    var req = Request.test_get("/index.html")
     var resp = fs.serve(req)
     print(" status :", resp.status)
     print(" Content-Type:", resp.headers.get("content-type"))
@@ -66,7 +66,7 @@ def main() raises:
     print()
 
     print("── 3. GET /big.txt with Range: bytes=10-19 ──")
-    var ranged = Request(method=Method.GET, url="/big.txt")
+    var ranged = Request.test_get("/big.txt")
     ranged.headers.set("Range", "bytes=10-19")
     var rresp = fs.serve(ranged)
     print(" status :", rresp.status)
@@ -75,12 +75,12 @@ def main() raises:
     print()
 
     print("── 4. GET /missing.png ──")
-    var miss = Request(method=Method.GET, url="/missing.png")
+    var miss = Request.test_get("/missing.png")
     print(" status :", fs.serve(miss).status)
     print()
 
     print("── 5. Traversal attempt ──")
-    var trv = Request(method=Method.GET, url="/../etc/passwd")
+    var trv = Request.test_get("/../etc/passwd")
     print(" status :", fs.serve(trv).status)
     print()
 

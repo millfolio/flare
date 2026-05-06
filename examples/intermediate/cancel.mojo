@@ -39,7 +39,6 @@ from flare.http import (
     Request,
     Response,
     WithCancel,
-    Method,
     Status,
     ok,
 )
@@ -95,7 +94,7 @@ def main() raises:
     var slow = SlowHandler(max_steps=10)
 
     # Path 1: handler runs to completion under Cancel.never().
-    var req = Request(method=Method.GET, url="/work")
+    var req = Request.test_get("/work")
     print("[1] SlowHandler with Cancel.never():")
     var resp1 = slow.serve(req^, Cancel.never())
     print(" status =", resp1.status, "body =", resp1.text())
@@ -103,7 +102,7 @@ def main() raises:
 
     # Path 2: WithCancel[PlainGreeter] forwards a plain Handler.
     print("[2] WithCancel[PlainGreeter].serve(req, Cancel.never()):")
-    var req2 = Request(method=Method.GET, url="/")
+    var req2 = Request.test_get("/")
     var wrapped = WithCancel[PlainGreeter](inner=PlainGreeter("hi"))
     var resp2 = wrapped.serve(req2^, Cancel.never())
     print(" status =", resp2.status, "body =", resp2.text())

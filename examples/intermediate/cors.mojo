@@ -47,7 +47,7 @@ def main() raises:
     # ── Permissive (``*``) — fastest setup ─────────────────────────────
     print("── 1. Permissive CORS ──")
     var permissive = Cors(ApiHandler(), CorsConfig.permissive())
-    var req = Request(method=Method.GET, url="/api/users")
+    var req = Request.test_get("/api/users")
     req.headers.set("Origin", "https://app.example.com")
     var resp = permissive.serve(req)
     print(
@@ -108,7 +108,7 @@ def main() raises:
 
     # ── Simple GET from allowed origin ─────────────────────────────────
     print(" simple GET from app.example.com:")
-    var sreq = Request(method=Method.GET, url="/api/users")
+    var sreq = Request.test_get("/api/users")
     sreq.headers.set("Origin", "https://app.example.com")
     var s = prod.serve(sreq)
     print(" status :", s.status)
