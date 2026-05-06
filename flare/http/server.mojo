@@ -12,6 +12,8 @@ Key performance characteristics:
 from std.memory import memcpy, stack_allocation
 from std.ffi import c_int, c_uint, external_call
 
+from json import dumps, Value as JsonValue
+
 from ..runtime._libc_time import libc_nanosleep_ms
 
 from .handler import Handler, CancelHandler
@@ -1352,13 +1354,49 @@ def ok_json(body: String) -> Response:
     """Create a 200 OK response with a JSON body.
 
     Args:
-        body: JSON string to send.
+        body: Pre-serialised JSON string to send. Use the
+              :func:`ok_json_value` overload below if you have a
+              typed :class:`json.Value` and want the framework to
+              serialise it for you (the symmetric output mirror of
+              the :class:`flare.http.Json[T]` extractor).
 
     Returns:
         A ``Response`` with ``Content-Type: application/json``.
     """
     var resp = Response(
         status=Status.OK, reason="OK", body=_string_to_bytes(body)
+    )
+    try:
+        resp.headers.set("Content-Type", "application/json")
+    except:
+        pass
+    return resp^
+
+
+def ok_json_value(value: JsonValue) raises -> Response:
+    """Create a 200 OK response from a typed :class:`json.Value`.
+
+    The output-side symmetric mirror of the :class:`Json[T]` input
+    extractor: a handler that takes ``Json[User]`` to read a typed
+    request body can return ``ok_json_value(updated_user)`` to ship
+    the updated value back without manual string concatenation.
+
+    Args:
+        value: A :class:`json.Value` (object / array / string /
+               number / bool / null). Serialised via
+               :func:`json.dumps` and emitted with
+               ``Content-Type: application/json``.
+
+    Returns:
+        A ``Response`` with status 200 and the serialised JSON body.
+
+    Raises:
+        Error: When :func:`json.dumps` rejects the value (cyclic
+               reference, etc.).
+    """
+    var serialised = dumps(value)
+    var resp = Response(
+        status=Status.OK, reason="OK", body=_string_to_bytes(serialised)
     )
     try:
         resp.headers.set("Content-Type", "application/json")
