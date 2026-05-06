@@ -39,6 +39,7 @@ For those, import the specific names from the matching module
 "first ten lines of code" surface, not the kitchen sink.
 """
 
+from .http.client import HttpClient
 from .http.handler import (
     Handler,
     HandlerExtractor,

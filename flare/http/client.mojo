@@ -59,6 +59,14 @@ from ..http2.client import (
 )
 from ..http2.hpack import HpackHeader
 from ..crypto.hmac import base64url_encode
+from .client_pool import ClientPool
+from ..net.socket import RawSocket
+from ..net._libc import (
+    AF_INET,
+    SOCK_STREAM,
+    INVALID_FD,
+)
+from std.ffi import c_int
 
 
 struct HttpClient(Movable):
@@ -116,6 +124,15 @@ struct HttpClient(Movable):
     client returns that response unchanged. Orthogonal to
     :attr:`_prefer_h2c` (prior-knowledge path); both default
     ``False``."""
+    var _pool: ClientPool
+    """Idle HTTP/1.1 connection pool keyed on ``(scheme, host,
+    port)``. ``ClientPool.disabled()`` (the default) keeps the
+    v0.6 close-after-each-request behaviour; calling
+    :meth:`with_pool` (or
+    :meth:`HttpClient.__init__(... pool=...)`) opts in. Only
+    cleartext ``http://`` requests reuse pooled fds in v0.7;
+    ``https://`` always full-handshakes (the TLS-resumption work
+    in Commit 04 keeps that handshake cheap)."""
 
     def __init__(
         out self,
@@ -145,6 +162,7 @@ struct HttpClient(Movable):
         self._auth_header = ""
         self._prefer_h2c = prefer_h2c
         self._h2c_upgrade = h2c_upgrade
+        self._pool = ClientPool.disabled()
 
     def __init__(
         out self,
@@ -165,6 +183,7 @@ struct HttpClient(Movable):
         self._auth_header = ""
         self._prefer_h2c = prefer_h2c
         self._h2c_upgrade = h2c_upgrade
+        self._pool = ClientPool.disabled()
 
     def __init__[
         A: Auth
@@ -189,6 +208,7 @@ struct HttpClient(Movable):
         self._auth_header = auth_headers.get("Authorization")
         self._prefer_h2c = prefer_h2c
         self._h2c_upgrade = h2c_upgrade
+        self._pool = ClientPool.disabled()
 
     def __init__[
         A: Auth
@@ -213,6 +233,70 @@ struct HttpClient(Movable):
         self._auth_header = auth_headers.get("Authorization")
         self._prefer_h2c = prefer_h2c
         self._h2c_upgrade = h2c_upgrade
+        self._pool = ClientPool.disabled()
+
+    def __del__(deinit self):
+        """Free any pooled fds owned by this client.
+
+        Idempotent on a moved-from client (``_pool._addr == 0``).
+        Single-owner: copies are never produced for ``HttpClient``
+        because the type is :trait:`Movable` only, so the
+        ``ClientPool`` heap state is freed exactly once."""
+        try:
+            self._pool.free()
+        except:
+            pass
+
+    def with_pool(
+        var self,
+        max_idle_per_host: Int = 8,
+        max_idle_total: Int = 64,
+        idle_timeout_ms: Int = 90_000,
+    ) raises -> HttpClient:
+        """Enable connection pooling on this client.
+
+        Returns the client (move-in / move-out so the call chains
+        with the regular ``HttpClient(...)`` constructor). The
+        pool is keyed on ``(scheme, host, port)`` and only
+        cleartext ``http://`` requests reuse pooled fds in v0.7
+        (TLS pooling lands together with the resumption-aware
+        pool key in a follow-up).
+
+        Args:
+            max_idle_per_host: Per-origin idle cap. Default ``8``.
+            max_idle_total: Total idle cap across origins. Default
+                ``64``. ``0`` disables the total cap.
+            idle_timeout_ms: Max wallclock age for a pooled fd
+                before lazy eviction. Default ``90_000`` ms.
+
+        Returns:
+            ``self`` with pooling enabled.
+
+        Example:
+            ```mojo
+            with HttpClient(base_url="http://api.example.com")
+                .with_pool() as c:
+                # Two GETs reuse the same TCP connection on idle reuse.
+                _ = c.get("/users")
+                _ = c.get("/items")
+            ```
+        """
+        try:
+            self._pool.free()
+        except:
+            pass
+        self._pool = ClientPool.new(
+            max_idle_per_host=max_idle_per_host,
+            max_idle_total=max_idle_total,
+            idle_timeout_ms=idle_timeout_ms,
+        )
+        return self^
+
+    def idle_count(read self) -> Int:
+        """Return the total number of fds currently sitting idle in
+        the pool. Returns 0 when pooling is disabled.
+        """
+        return self._pool.total_idle()
 
     # ── Context manager ───────────────────────────────────────────────────────
 
@@ -588,6 +672,16 @@ struct HttpClient(Movable):
         """
         var u = Url.parse(url)
 
+        # Pooling is enabled only for cleartext h1 in v0.7. The TLS
+        # path always full-handshakes (TLS resumption keeps that
+        # cheap; pool key-with-ALPN lands in a follow-up).
+        var pool_enabled = (
+            self._pool._addr != 0
+            and not u.is_tls()
+            and not self._prefer_h2c
+            and not self._h2c_upgrade
+        )
+
         # ── Build wire request ─────────────────────────────────────────────
         var wire = method + " " + u.request_target() + " HTTP/1.1\r\n"
         # Host header (RFC 7230 §5.4 — required)
@@ -598,7 +692,10 @@ struct HttpClient(Movable):
             host_header = host_header + ":" + String(Int(u.port))
         wire += "Host: " + host_header + "\r\n"
         wire += "User-Agent: " + self._user_agent + "\r\n"
-        wire += "Connection: close\r\n"
+        if pool_enabled:
+            wire += "Connection: keep-alive\r\n"
+        else:
+            wire += "Connection: close\r\n"
         wire += "Accept: */*\r\n"
 
         # Authorization header from stored auth credential
@@ -692,6 +789,15 @@ struct HttpClient(Movable):
                     self._auth_header,
                 )
                 return resp_upg^
+            if pool_enabled:
+                # Pooled keep-alive path with one stale-conn retry.
+                # If the first attempt was on a pooled fd and the
+                # peer FIN'd the idle keep-alive while we were
+                # writing, retry once with a fresh connection (RFC
+                # 7230 §6.3.1).
+                stream.close()  # discard the fresh stream we just opened
+                var key = ClientPool.build_key(u.scheme, u.host, Int(u.port))
+                return self._send_h1_pooled(key, u.host, u.port, wire, body)
             var wire_bytes = wire.as_bytes()
             stream.write_all(Span[UInt8, _](wire_bytes))
             if len(body) > 0:
@@ -699,6 +805,81 @@ struct HttpClient(Movable):
             var resp = _read_http_response_tcp(stream)
             stream.close()
             return resp^
+
+    def _send_h1_pooled(
+        self,
+        key: String,
+        host: String,
+        port: UInt16,
+        wire: String,
+        body: List[UInt8],
+    ) raises -> Response:
+        """Send one HTTP/1.1 request through the connection pool.
+
+        Tries to acquire an idle fd for ``key``; if that fails or
+        the pooled fd is stale (peer FIN'd the keep-alive while
+        idle), opens a fresh connection. On success, releases the
+        fd back to the pool when the response permits keep-alive,
+        otherwise closes it.
+        """
+        # First try a pooled fd.
+        var pooled_fd = self._pool.acquire(key)
+        var attempted_pooled = pooled_fd >= 0
+        var stream: TcpStream
+        if attempted_pooled:
+            var sock = RawSocket(
+                c_int(pooled_fd), AF_INET, SOCK_STREAM, _wrap=True
+            )
+            stream = TcpStream(sock^, SocketAddr.localhost(port))
+        else:
+            stream = _connect_with_fallback(host, port, self._timeout_ms)
+
+        var wire_bytes = wire.as_bytes()
+        var io_failed = False
+        try:
+            stream.write_all(Span[UInt8, _](wire_bytes))
+            if len(body) > 0:
+                stream.write_all(Span[UInt8, _](body))
+        except:
+            io_failed = True
+
+        if not io_failed:
+            var can_reuse = False
+            try:
+                var resp = _read_http_response_framed_tcp(stream, can_reuse)
+                if can_reuse:
+                    # Release fd to pool: capture fd, neutralise the
+                    # RawSocket so its destructor is a no-op, then
+                    # push.
+                    var fd = Int(stream._socket.fd)
+                    stream._socket.fd = INVALID_FD
+                    self._pool.release(key, fd)
+                else:
+                    stream.close()
+                return resp^
+            except:
+                pass
+
+        # IO or parse failure on a *pooled* fd is the canonical
+        # stale-conn signature. Retry once with a fresh connection.
+        # Failure on a *fresh* fd is a real error.
+        stream.close()
+        if not attempted_pooled:
+            raise NetworkError("HTTP/1.1 pooled request failed")
+
+        var fresh = _connect_with_fallback(host, port, self._timeout_ms)
+        fresh.write_all(Span[UInt8, _](wire_bytes))
+        if len(body) > 0:
+            fresh.write_all(Span[UInt8, _](body))
+        var can_reuse2 = False
+        var resp2 = _read_http_response_framed_tcp(fresh, can_reuse2)
+        if can_reuse2:
+            var fd2 = Int(fresh._socket.fd)
+            fresh._socket.fd = INVALID_FD
+            self._pool.release(key, fd2)
+        else:
+            fresh.close()
+        return resp2^
 
 
 # ── HTTP response parser helpers ──────────────────────────────────────────────
@@ -1238,6 +1419,150 @@ def _read_http_response_tcp(mut stream: TcpStream) raises -> Response:
     """
     var raw = _read_all_tcp(stream)
     return _parse_http_response(raw)
+
+
+def _read_http_response_framed_tcp(
+    mut stream: TcpStream,
+    mut can_reuse: Bool,
+) raises -> Response:
+    """Read one framed HTTP/1.1 response and return whether the
+    connection is in a reusable state.
+
+    Unlike :func:`_read_http_response_tcp`, this reader stops at the
+    end of the framed body (``Content-Length`` or
+    ``Transfer-Encoding: chunked``) instead of reading until EOF, so
+    the underlying socket can be returned to a connection pool for
+    keep-alive reuse.
+
+    Returns:
+        ``(response, can_reuse)``: ``can_reuse`` is ``True`` when no
+        ``Connection: close`` header is present, the response is
+        properly framed, and the body was read cleanly.
+
+    Raises:
+        NetworkError: On I/O or parse error.
+    """
+    var buf = List[UInt8](capacity=_READ_BUF_SIZE)
+    buf.resize(_READ_BUF_SIZE, 0)
+    var raw = List[UInt8](capacity=4096)
+    var hdr_end = -1
+
+    while hdr_end < 0:
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        if n == 0:
+            if len(raw) == 0:
+                raise NetworkError("HTTP response: peer closed before reply")
+            raise NetworkError("HTTP response: missing header terminator")
+        for i in range(n):
+            raw.append(buf[i])
+        hdr_end = _find_crlf2(raw)
+
+    var header_bytes = List[UInt8](capacity=hdr_end)
+    for i in range(hdr_end):
+        header_bytes.append(raw[i])
+    var header_str = _bytes_to_str(header_bytes)
+    var lines = _split_lines(header_str)
+    if len(lines) == 0:
+        raise NetworkError("Empty HTTP response")
+
+    var content_length = -1
+    var is_chunked = False
+    var conn_close = False
+    for li in range(1, len(lines)):
+        var ln = lines[li]
+        var colon = ln.find(":")
+        if colon < 0:
+            continue
+        var k_str = (
+            String(String(unsafe_from_utf8=ln.as_bytes()[:colon]))
+            .strip()
+            .lower()
+        )
+        var v_str = String(
+            String(unsafe_from_utf8=ln.as_bytes()[colon + 1 :])
+        ).strip()
+        if k_str == "content-length":
+            try:
+                content_length = atol(v_str)
+            except:
+                raise NetworkError("invalid Content-Length")
+        elif k_str == "transfer-encoding":
+            if v_str.lower() == "chunked":
+                is_chunked = True
+        elif k_str == "connection":
+            if v_str.lower() == "close":
+                conn_close = True
+
+    var body_start = hdr_end + 4
+
+    if is_chunked:
+        # Drain chunks until we see the final ``0\r\n`` chunk
+        # followed by optional trailers and the closing ``\r\n``.
+        # We scan for ``\r\n0\r\n`` (start of last chunk) and then
+        # for the next ``\r\n\r\n`` (end of trailers / message).
+        while True:
+            var pos = body_start
+            var found_terminator = False
+            while pos + 4 < len(raw):
+                if (
+                    raw[pos] == 13
+                    and raw[pos + 1] == 10
+                    and raw[pos + 2] == 48  # '0'
+                    and raw[pos + 3] == 13
+                    and raw[pos + 4] == 10
+                ):
+                    var t = pos + 5
+                    while t + 3 < len(raw):
+                        if (
+                            raw[t] == 13
+                            and raw[t + 1] == 10
+                            and raw[t + 2] == 13
+                            and raw[t + 3] == 10
+                        ):
+                            found_terminator = True
+                            break
+                        t += 1
+                    if found_terminator:
+                        break
+                    if (
+                        t + 1 == len(raw)
+                        or t + 2 == len(raw)
+                        or t + 3 == len(raw)
+                    ):
+                        break
+                pos += 1
+            if found_terminator:
+                break
+            var n2 = stream.read(buf.unsafe_ptr(), len(buf))
+            if n2 == 0:
+                raise NetworkError("Unexpected EOF in chunked body")
+            for j in range(n2):
+                raw.append(buf[j])
+    elif content_length >= 0:
+        var have = len(raw) - body_start
+        var need = content_length - have
+        while need > 0:
+            var to_read = need if need < len(buf) else len(buf)
+            var n3 = stream.read(buf.unsafe_ptr(), to_read)
+            if n3 == 0:
+                raise NetworkError("Unexpected EOF in body")
+            for j in range(n3):
+                raw.append(buf[j])
+            need -= n3
+    else:
+        # No content-length and not chunked: must read to EOF;
+        # cannot reuse the connection.
+        conn_close = True
+        while True:
+            var n4 = stream.read(buf.unsafe_ptr(), len(buf))
+            if n4 == 0:
+                break
+            for j in range(n4):
+                raw.append(buf[j])
+
+    var resp = _parse_http_response(raw)
+    can_reuse = not conn_close
+    return resp^
 
 
 # ── HTTP/2 send helpers (ALPN h2 + h2c-prior-knowledge) ──────────────────────
