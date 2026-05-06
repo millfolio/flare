@@ -45,6 +45,14 @@ struct Response(Movable):
         headers: Response headers (owned ``HeaderMap``).
         body: Response body bytes.
         version: HTTP version string (default ``"HTTP/1.1"``).
+        trailers: Response trailer fields (RFC 7230 §4.1.2). Empty
+            for non-chunked responses; populated by the client when
+            decoding a chunked response that carries trailer fields
+            after the final chunk. Server-side trailer emission
+            uses :class:`StreamingResponse[B].trailers` instead --
+            buffered :class:`Response` always frames with
+            ``Content-Length`` so it never carries trailers
+            outbound.
 
     This type is ``Movable`` (owns headers and body) but not ``Copyable``.
 
@@ -53,6 +61,10 @@ struct Response(Movable):
         var resp = client.get("http://example.com")
         if resp.ok():
             print(resp.text())
+        # Trailers (gRPC-style status, etc) are populated when the
+        # peer sent ``Transfer-Encoding: chunked`` with trailing
+        # fields after the zero chunk:
+        var grpc_status = resp.trailers.get("grpc-status")
         ```
     """
 
@@ -61,6 +73,7 @@ struct Response(Movable):
     var headers: HeaderMap
     var body: List[UInt8]
     var version: String
+    var trailers: HeaderMap
 
     def __init__(
         out self,
@@ -74,6 +87,7 @@ struct Response(Movable):
         self.headers = HeaderMap()
         self.body = body^
         self.version = version^
+        self.trailers = HeaderMap()
 
     def reset(mut self, status: Int = 200, var reason: String = ""):
         """Recycle this ``Response`` in place for the next request on
@@ -104,6 +118,8 @@ struct Response(Movable):
         # change in the Mojo stdlib).
         self.headers._keys.clear()
         self.headers._values.clear()
+        self.trailers._keys.clear()
+        self.trailers._values.clear()
 
     def ok(self) -> Bool:
         """Return True if the status code is 2xx.

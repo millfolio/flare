@@ -112,6 +112,14 @@ struct StreamingResponse[B: Body](Movable):
     var headers: HeaderMap
     var version: String
     var body: Self.B
+    var trailers: HeaderMap
+    """Trailer fields emitted after the chunked body (RFC 7230
+    §4.1.2). Empty by default; callers populate before / during
+    body emission. Only emitted when the body is chunk-framed
+    (``body.content_length()`` returns ``None``); ignored under
+    Content-Length framing where trailers are not legal. The
+    serialiser auto-sets the ``Trailer:`` header listing the
+    declared trailer names so peers know what to expect."""
 
     def __init__(
         out self,
@@ -134,6 +142,7 @@ struct StreamingResponse[B: Body](Movable):
         self.headers = HeaderMap()
         self.version = version
         self.body = body^
+        self.trailers = HeaderMap()
 
     def ok(self) -> Bool:
         """Return True if the status code is 2xx."""

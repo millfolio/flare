@@ -210,9 +210,10 @@ def serialize_streaming_response[
     var content_length_opt = resp.body.content_length()
     var is_chunked = not content_length_opt
 
-    # User-supplied headers (skip Content-Length and
-    # Transfer-Encoding — we set them ourselves). HeaderMap
-    # stores keys / values as parallel Lists; iterate by index.
+    # User-supplied headers (skip Content-Length, Transfer-
+    # Encoding, and any caller-supplied Trailer header -- we set
+    # all three ourselves). HeaderMap stores keys / values as
+    # parallel Lists; iterate by index.
     for i in range(len(resp.headers._keys)):
         var k = resp.headers._keys[i]
         if (
@@ -220,6 +221,8 @@ def serialize_streaming_response[
             or k == "content-length"
             or k == "Transfer-Encoding"
             or k == "transfer-encoding"
+            or k == "Trailer"
+            or k == "trailer"
         ):
             continue
         _write_header_line(wire, k, resp.headers._values[i])
@@ -227,6 +230,16 @@ def serialize_streaming_response[
     # Framing header.
     if is_chunked:
         _write_header_line(wire, "Transfer-Encoding", "chunked")
+        # Auto-emit a ``Trailer:`` header listing the declared
+        # trailer field names per RFC 7230 §4.4 so peers know
+        # what to expect after the zero chunk.
+        if len(resp.trailers._keys) > 0:
+            var names = String("")
+            for i in range(len(resp.trailers._keys)):
+                if i > 0:
+                    names += ", "
+                names += resp.trailers._keys[i]
+            _write_header_line(wire, "Trailer", names)
     else:
         _write_header_line(
             wire, "Content-Length", String(content_length_opt.value())
@@ -267,11 +280,16 @@ def serialize_streaming_response[
             for b in chunk:
                 wire.append(b)
 
-    # Chunked terminator: ``0\r\n\r\n``.
+    # Chunked terminator. With trailers: ``0\r\n<trailer
+    # lines>\r\n``. Without trailers: ``0\r\n\r\n``.
     if is_chunked:
         wire.append(UInt8(ord("0")))
         wire.append(UInt8(13))
         wire.append(UInt8(10))
+        for i in range(len(resp.trailers._keys)):
+            _write_header_line(
+                wire, resp.trailers._keys[i], resp.trailers._values[i]
+            )
         wire.append(UInt8(13))
         wire.append(UInt8(10))
 

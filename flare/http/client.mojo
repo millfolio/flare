@@ -764,13 +764,16 @@ def _parse_http_response(raw: List[UInt8]) raises -> Response:
         )
         headers.append(k, v)
 
-    # Extract body (everything after \r\n\r\n)
+    # Extract body (everything after \r\n\r\n) plus any trailer
+    # fields the chunked decoder pulled off after the zero chunk.
     var body_start = header_end + 4
-    var body = _extract_body(raw, body_start, headers)
+    var trailers = HeaderMap()
+    var body = _extract_body_and_trailers(raw, body_start, headers, trailers)
 
     var resp = Response(status=status_code, reason=reason^)
     resp.headers = headers^
     resp.body = body^
+    resp.trailers = trailers^
     return resp^
 
 
@@ -910,32 +913,50 @@ def _lower_str(s: String) -> String:
     return out^
 
 
-def _extract_body(
-    raw: List[UInt8], body_start: Int, headers: HeaderMap
+def _extract_body_and_trailers(
+    raw: List[UInt8],
+    body_start: Int,
+    headers: HeaderMap,
+    mut trailers: HeaderMap,
 ) raises -> List[UInt8]:
-    """Extract the response body from the raw byte buffer.
+    """Extract the response body + (when chunked) any trailer
+    fields from the raw byte buffer.
 
     Handles:
-    - ``Transfer-Encoding: chunked``
-    - ``Content-Length: N``
-    - Connection-close (remainder of buffer)
+
+    - ``Transfer-Encoding: chunked`` (with optional trailer
+      fields after the zero-chunk; populates ``trailers``).
+    - ``Content-Length: N``.
+    - Connection-close (remainder of buffer).
 
     Args:
         raw: Full raw response bytes.
         body_start: Byte offset of the first body byte.
         headers: Parsed response headers.
+        trailers: Output ``HeaderMap`` populated with any trailer
+            fields parsed from the chunked body.
 
     Returns:
         Decoded body bytes.
 
     Raises:
-        NetworkError: If chunked encoding is malformed.
+        NetworkError: If chunked encoding is malformed, or if both
+            ``Transfer-Encoding: chunked`` and ``Content-Length``
+            are present (RFC 7230 §3.3.3 request-smuggling guard),
+            or if a trailer field is forbidden per RFC 7230
+            §4.1.2.
     """
     var te = _lower_str(headers.get("Transfer-Encoding"))
-    if "chunked" in te:
-        return _decode_chunked(raw, body_start)
-
     var cl_str = headers.get("Content-Length")
+    if "chunked" in te:
+        if cl_str.byte_length() > 0:
+            raise NetworkError(
+                "response carries both Transfer-Encoding: chunked and"
+                " Content-Length (RFC 7230 §3.3.3 forbids; would enable"
+                " request smuggling)"
+            )
+        return _decode_chunked(raw, body_start, trailers)
+
     if cl_str.byte_length() > 0:
         var cl = _parse_int(cl_str)
         var available = len(raw) - body_start
@@ -954,18 +975,73 @@ def _extract_body(
     return body^
 
 
-def _decode_chunked(raw: List[UInt8], start: Int) raises -> List[UInt8]:
-    """Decode a ``Transfer-Encoding: chunked`` body.
+def _extract_body(
+    raw: List[UInt8], body_start: Int, headers: HeaderMap
+) raises -> List[UInt8]:
+    """Backwards-compatible wrapper over
+    :func:`_extract_body_and_trailers` for callers that don't care
+    about trailer fields. The trailer ``HeaderMap`` is built and
+    discarded; the smuggling + trailer-validity checks still run.
+    """
+    var trailers = HeaderMap()
+    return _extract_body_and_trailers(raw, body_start, headers, trailers)
+
+
+def _is_forbidden_trailer(name: String) -> Bool:
+    """Return ``True`` if ``name`` is forbidden as a trailer field
+    per RFC 7230 §4.1.2.
+
+    The RFC bans framing headers (``Transfer-Encoding``,
+    ``Content-Length``), routing headers (``Host``), the
+    ``Trailer`` header itself (no nesting), authentication
+    (``Authorization``, ``Set-Cookie``, ``Cookie``), and
+    response-control / message-modifier headers
+    (``Cache-Control``, ``Expires``, ``Date``, ``Location``,
+    ``Retry-After``, ``Vary``, ``Warning``, ``Age``, ``Expect``,
+    ``Pragma``, ``Range``, ``TE``).
+
+    flare ships the practical security subset: framing, routing,
+    auth, and the ``Trailer`` self-reference. The remaining
+    response-control entries are caller-controlled and won't
+    enable smuggling -- they're left to the caller's policy.
+    """
+    var lower = _lower_str(name)
+    if lower == "transfer-encoding":
+        return True
+    if lower == "content-length":
+        return True
+    if lower == "host":
+        return True
+    if lower == "trailer":
+        return True
+    if lower == "authorization":
+        return True
+    if lower == "set-cookie":
+        return True
+    if lower == "cookie":
+        return True
+    return False
+
+
+def _decode_chunked(
+    raw: List[UInt8], start: Int, mut trailers: HeaderMap
+) raises -> List[UInt8]:
+    """Decode a ``Transfer-Encoding: chunked`` body and any
+    trailer fields that follow the zero-length chunk.
 
     Args:
         raw: Complete raw byte buffer.
         start: Byte offset of the first chunk-size line.
+        trailers: Output ``HeaderMap`` populated with any trailer
+            fields parsed after the zero-length chunk per RFC
+            7230 §4.1.2.
 
     Returns:
         Reassembled body bytes.
 
     Raises:
-        NetworkError: If a chunk-size line is unparseable.
+        NetworkError: If a chunk-size line is unparseable, or a
+            trailer field is forbidden per RFC 7230 §4.1.2.
     """
     var out = List[UInt8](capacity=4096)
     var pos = start
@@ -988,6 +1064,39 @@ def _decode_chunked(raw: List[UInt8], start: Int) raises -> List[UInt8]:
         var chunk_size = _parse_hex(String(size_hex.strip()))
         pos = line_end + 2  # skip \r\n
         if chunk_size == 0:
+            # Zero-chunk -- read trailer fields (RFC 7230 §4.1.2)
+            # until empty CRLF terminator.
+            while pos < n:
+                var t_end = _find_crlf(raw, pos)
+                if t_end < 0:
+                    break
+                if t_end == pos:
+                    # Empty line -- end of trailers.
+                    break
+                var line = String(capacity=t_end - pos + 1)
+                for i in range(pos, t_end):
+                    line += chr(Int(raw[i]))
+                var colon = _str_find(line, ":")
+                if colon < 0:
+                    raise NetworkError(
+                        "malformed trailer field (no colon): " + line
+                    )
+                var k = String(
+                    String(
+                        String(unsafe_from_utf8=line.as_bytes()[:colon])
+                    ).strip()
+                )
+                var v = String(
+                    String(
+                        String(unsafe_from_utf8=line.as_bytes()[colon + 1 :])
+                    ).strip()
+                )
+                if _is_forbidden_trailer(k):
+                    raise NetworkError(
+                        "forbidden trailer field per RFC 7230 §4.1.2: " + k
+                    )
+                trailers.append(k, v)
+                pos = t_end + 2
             break
         var end = pos + chunk_size
         if end > n:
