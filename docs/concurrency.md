@@ -1,5 +1,50 @@
 # Concurrency in flare — what is sound, what is the user's job
 
+## What this means for your handlers
+
+flare uses a thread-per-core reactor with **synchronous** handlers.
+Mojo doesn't have async / await yet, so `def serve(req) raises ->
+Response` runs on a pthread worker and *blocks that worker until it
+returns*. This is the nginx model, not the async-tokio model.
+
+Three practical implications you need to design around:
+
+1. **Long blocking I/O blocks one worker.** A 30 ms DB call holds
+   one worker for 30 ms, preventing that worker from accepting
+   other connections during the call. With `num_workers=N` you
+   have *N concurrently in-flight requests*, full stop. There is
+   no per-connection task that can yield back to a runtime while
+   waiting on I/O — that's an async-runtime thing flare doesn't
+   have.
+2. **Size `num_workers` to your handler latency profile.** For
+   compute-bound or fast-I/O workloads (cache hits, in-process
+   computation, small DB queries), `num_workers=num_cpus()` is
+   the right starting point. For workloads with long blocking
+   calls, you want larger — pick `num_workers` such that
+   `num_workers ÷ p99_handler_latency_seconds` exceeds your
+   target req/s. Bench your real handler before you ship.
+3. **Use `block_in_pool` for genuinely-blocking C calls.** When
+   you have to call a synchronous C library (an old database
+   driver, a compute-heavy native function), wrap the call in
+   `flare.runtime.block_in_pool(...)` so it runs on a separate
+   pthread pool. The reactor worker stays unblocked, ready to
+   service the next event. The function returns the result back
+   to the original handler frame on the originating worker.
+
+If you're coming from axum/tokio, fastapi, asyncio, or any other
+async-first framework, the mental shift is: "one in-flight request
+per worker, not thousands." The throughput numbers in
+[`benchmark.md`](benchmark.md) reflect non-blocking
+"Hello, World!" workloads where the handler returns in microseconds;
+real-app throughput depends on your handler latency × `num_workers`.
+
+When Mojo grows async / await, flare will adopt it additively (the
+`Handler` trait already takes `req` by borrow, which is the only
+shape that composes cleanly with both sync and async dispatch).
+Until then, plan around the sync model.
+
+## Cross-thread primitives
+
 flare's reactor is single-threaded per worker. The expensive shared
 state lives in three places: per-connection state machines (owned by
 one reactor thread), per-worker pools (`Pool[T]`, `Pool[BufferHandle]`,
@@ -7,8 +52,8 @@ one reactor thread), per-worker pools (`Pool[T]`, `Pool[BufferHandle]`,
 cross-thread primitives (`Cancel`, `HandoffQueue`, `block_in_pool`'s
 heap-handoff) that are explicitly designed for cross-thread use.
 
-This doc is about the third bucket — the cross-thread primitives —
-and about the closure / `def`-binding rules in Mojo
+The rest of this doc is about the third bucket — the cross-thread
+primitives — and about the closure / `def`-binding rules in Mojo
 `1.0.0b1.dev2026042717` you need to know to use them safely.
 
 ## The Mojo closure-binding rules flare relies on
