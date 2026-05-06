@@ -557,6 +557,8 @@ from .http.simd_parsers import (
 )
 from .http.handler import (
     Handler,
+    HandlerInfallible,
+    WithRaises,
     FnHandler,
     FnHandlerCT,
     CancelHandler,

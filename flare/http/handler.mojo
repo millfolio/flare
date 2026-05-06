@@ -83,6 +83,12 @@ trait Handler(ImplicitlyDestructible, Movable):
     plain function, ``Router`` dispatches by method + path, ``App[S]``
     injects state, and any user struct can implement the trait for its
     own routing / middleware / adapter needs.
+
+    For handlers whose body is provably infallible (static-response
+    fast paths, sentinel routes, health checks), see the sibling
+    :trait:`HandlerInfallible` trait + :class:`WithRaises` adapter --
+    the ``raises`` annotation in the cookbook examples is a real cost
+    on those code paths.
     """
 
     def serve(self, req: Request) raises -> Response:
@@ -96,6 +102,45 @@ trait Handler(ImplicitlyDestructible, Movable):
 
         Raises:
             Error: Any error; the server maps this to a 500 response.
+        """
+        ...
+
+
+trait HandlerInfallible(ImplicitlyDestructible, Movable):
+    """A :trait:`Handler` whose ``serve`` is provably infallible.
+
+    The standard :trait:`Handler` requires ``serve(self, req: Request)
+    raises -> Response``. For most handlers this is the right shape:
+    real code paths can fail for many reasons (DB query, deserialise,
+    external HTTP, etc.), and the server's catch-converts-to-500
+    contract handles them uniformly.
+
+    But some handler bodies *literally cannot* fail:
+
+    * A static-response fast path that returns a pre-computed
+      :class:`StaticResponse` (no parsing, no I/O, no allocation).
+    * A health-check route that always returns 200.
+    * A sentinel "the handler ran" route in tests.
+
+    For those, :trait:`HandlerInfallible` lets the implementer write
+    ``def serve(self, req: Request) -> Response`` (no ``raises``).
+    The :class:`WithRaises` adapter wraps an infallible handler so it
+    fits anywhere a regular :trait:`Handler` is expected (Router, App,
+    middleware nesting). Mojo's ``def`` supports both raises and
+    no-raises declarations -- this trait variant just lets the
+    framework express the no-raises shape on a handler-by-handler
+    basis.
+    """
+
+    def serve(self, req: Request) -> Response:
+        """Produce a ``Response`` for ``req``. Cannot fail.
+
+        Args:
+            req: The incoming request.
+
+        Returns:
+            The response to send back to the client. Implementations
+            that might fail must use :trait:`Handler` instead.
         """
         ...
 
@@ -447,4 +492,43 @@ struct WithCancel[H: Handler & Copyable & Movable](
         Returns:
             Whatever ``self.inner.serve(req)`` returns.
         """
+        return self.inner.serve(req)
+
+
+# ── WithRaises: HandlerInfallible -> Handler adapter ─────────────────────────
+
+
+@fieldwise_init
+struct WithRaises[Inner: HandlerInfallible & Copyable & Movable](
+    Copyable, Handler, Movable
+):
+    """Adapt a :trait:`HandlerInfallible` so it fits the regular
+    :trait:`Handler` constraint.
+
+    Use cases:
+
+    * ``Router.get(path, h)`` accepts a :trait:`Handler`. Wrapping
+      an infallible handler in :class:`WithRaises` lets it slot in
+      without rewriting the router signature.
+    * Middleware chains (:class:`Logger`, :class:`Cors`, etc.)
+      compose against :trait:`Handler`. The adapter fits the
+      infallible handler at the bottom of the chain.
+
+    The adapter has zero runtime cost: ``serve`` is ``@always_inline``,
+    forwards directly to the inner ``serve(req)``, and the only added
+    work is satisfying the ``raises`` contract (which the compiler
+    elides since the inner call is provably infallible).
+
+    The reverse adapter does NOT exist: a :trait:`Handler` can fail,
+    so it isn't safe to expose as :trait:`HandlerInfallible`.
+    """
+
+    var inner: Self.Inner
+    """The wrapped infallible handler."""
+
+    @always_inline
+    def serve(self, req: Request) raises -> Response:
+        """Forward to ``self.inner.serve(req)``. The ``raises``
+        annotation is satisfied vacuously: the inner ``serve`` is
+        infallible by construction."""
         return self.inner.serve(req)
