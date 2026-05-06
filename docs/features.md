@@ -249,7 +249,7 @@ deferred-to-a-later-minor.
 | `TimerWheel` — hashed timing wheel for idle / deadline timeouts | `flare.runtime.timer_wheel` |
 | `default_worker_count()`, `num_cpus()` | `flare.runtime` |
 | `HandoffPolicy.from_env()`, `HandoffQueue` (bounded MPSC FIFO of fd tokens), `WorkerHandoffPool.peek_idle_worker(exclude)` — cross-worker steering, gated on `FLARE_SOAK_WORKERS=on` | [`work_stealing.mojo`](../examples/advanced/work_stealing.mojo) |
-| `IoUringRing`, `IoUringParams`, `is_io_uring_available()` — opt-in `io_uring` reactor on Linux ≥ 6.0 (`FLARE_BUFRING_HANDLER=1`); auto-fallback to `epoll` | [`iouring_plaintext.mojo`](../examples/advanced/iouring_plaintext.mojo) |
+| `IoUringRing`, `IoUringParams`, `is_io_uring_available()` — opt-in `io_uring` reactor on Linux ≥ 6.0 (`FLARE_BUFRING_HANDLER=1`); auto-fallback to `epoll` | `flare.runtime.io_uring` |
 | `Cancel`, `CancelCell`, `CancelReason` (peer FIN / deadline / drain) plumbed to `CancelHandler` | [`cancel.mojo`](../examples/intermediate/cancel.mojo) |
 
 ## Performance internals
