@@ -69,9 +69,12 @@ payloads -- attackers who can pick the plaintext can otherwise
 inflate a few-byte ciphertext into many MiB of decompressed
 output, exhausting the server."""
 
-comptime _SYNC_FLUSH_TRAILER: List[UInt8] = List[UInt8](
-    UInt8(0x00), UInt8(0x00), UInt8(0xFF), UInt8(0xFF)
-)
+comptime _SYNC_FLUSH_TRAILER: List[UInt8] = [
+    UInt8(0x00),
+    UInt8(0x00),
+    UInt8(0xFF),
+    UInt8(0xFF),
+]
 """RFC 7692 §7.2.1: the empty-deflate-block trailer the encoder
 removes and the decoder appends back."""
 
