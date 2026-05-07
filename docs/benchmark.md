@@ -672,7 +672,7 @@ to "1 byte / 100 ms" inside wrk's protocol shape). Gate:
 The lua approximation does not byte-trickle inside a single
 request body the way a true byte-trickle harness would; the
 `read_body_timeout_ms` deadline path is exercised end-to-end in
-[`tests/test_server_deadlines.mojo`](../tests/test_server_deadlines.mojo)
+[`tests/http/test_server_deadlines.mojo`](../tests/http/test_server_deadlines.mojo)
 instead. Soak covers the resource-exhaustion shape (many
 connections held under pressure).
 

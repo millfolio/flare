@@ -180,13 +180,13 @@ The same audit ran in the other direction for capturing closures:
 the design speculated that capturing closures had landed; the
 probe falsified the claim. The result is the closure-shape
 contract documented above and pinned by
-[`tests/test_closure_send_contract.mojo`](../tests/test_closure_send_contract.mojo).
+[`tests/runtime/test_closure_send_contract.mojo`](../tests/runtime/test_closure_send_contract.mojo).
 
 ## Recommended patterns today
 
 | You want to ... | Use ... |
 |---|---|
-| A handler that closes over per-app state | `Handler` struct with the state as fields — see [`tests/test_handler.mojo`](../tests/test_handler.mojo) `_Greeter` for the canonical shape. |
+| A handler that closes over per-app state | `Handler` struct with the state as fields — see [`tests/http/test_handler.mojo`](../tests/http/test_handler.mojo) `_Greeter` for the canonical shape. |
 | A handler that closes over per-request derived state | A function chain with the state passed explicitly through `Request.params` / `Request.headers`, or a struct that re-builds the derived state on every call. |
 | Background work outside the reactor | `block_in_pool[T](work, cancel)` with `work: def() raises thin -> T`. Capture-by-reference is impossible because the type is `thin`; data shared with the worker travels via heap-allocated structs whose addresses are read on the worker side. |
 | Cross-worker connection migration | `WorkerHandoffPool[N]` — push the fd as an `Int` token, the receiving worker pops and adopts. |

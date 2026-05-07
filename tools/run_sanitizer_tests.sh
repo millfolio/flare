@@ -15,7 +15,7 @@
 #
 #   tools/run_sanitizer_tests.sh asan
 #   tools/run_sanitizer_tests.sh tsan
-#   tools/run_sanitizer_tests.sh asan tests/test_iovec.mojo  # single file
+#   tools/run_sanitizer_tests.sh asan tests/runtime/test_iovec.mojo  # single file
 #
 set -euo pipefail
 
@@ -51,28 +51,28 @@ esac
 # sections in `.cursor/rules/sanitizers-and-bounds-checking.mdc`.
 ASAN_TESTS=(
   # Track B substrate (FFI-heavy by construction)
-  "tests/test_io_uring.mojo"          # B0 — io_uring direct-syscall FFI
-  "tests/test_iovec.mojo"             # B4 — writev(2) iovec-buf
-  "tests/test_buffer_pool.mojo"       # B5 — bucketed buffer pool
-  "tests/test_response_pool.mojo"     # B6 — response pool
-  "tests/test_date_cache.mojo"        # B7 — clock_gettime + IMF-fixdate
-  "tests/test_hpack_huffman.mojo"     # B9 — RFC 7541 codec
-  "tests/test_simd_parsers.mojo"      # B10 — memmem / percent-decode / cookie
-  "tests/test_header_phf.mojo"        # B2 — comptime header PHF
-  "tests/test_intern.mojo"            # B3 — StaticString intern table
+  "tests/runtime/test_io_uring.mojo"          # B0 — io_uring direct-syscall FFI
+  "tests/runtime/test_iovec.mojo"             # B4 — writev(2) iovec-buf
+  "tests/runtime/test_buffer_pool.mojo"       # B5 — bucketed buffer pool
+  "tests/http/test_response_pool.mojo"     # B6 — response pool
+  "tests/runtime/test_date_cache.mojo"        # B7 — clock_gettime + IMF-fixdate
+  "tests/http/test_hpack_huffman.mojo"     # B9 — RFC 7541 codec
+  "tests/http/test_simd_parsers.mojo"      # B10 — memmem / percent-decode / cookie
+  "tests/http/test_header_phf.mojo"        # B2 — comptime header PHF
+  "tests/http/test_intern.mojo"            # B3 — StaticString intern table
   # Pre-existing FFI-heavy substrates
-  "tests/test_pool.mojo"              # Pool[T] typed allocator
-  "tests/test_libc_time.mojo"         # libc_usleep / nanosleep_ms FFI
-  "tests/test_safety_asserts.mojo"    # bounds + debug_assert harness
+  "tests/runtime/test_pool.mojo"              # Pool[T] typed allocator
+  "tests/runtime/test_libc_time.mojo"         # libc_usleep / nanosleep_ms FFI
+  "tests/runtime/test_safety_asserts.mojo"    # bounds + debug_assert harness
   # Unified-HTTP/WS-over-HTTP/2 (Phase 1-7) FFI surfaces -- recv/send
   # loops on raw fds, RawSocket(_wrap=True) reconstruction during
   # PendingConnHandle -> ConnHandle/H2ConnHandle migration, Pool
   # alloc/free of the new per-conn handles.
-  "tests/test_h2_conn_handle.mojo"           # H2ConnHandle + PendingConnHandle recv/send
-  "tests/test_unified_http_server.mojo"      # full unified reactor over HTTP/1.1 + HTTP/2
-  "tests/test_unified_http_client.mojo"      # HttpClient h2c + auth FFI
-  "tests/test_h2_server_handler.mojo"        # HttpClient(prefer_h2c=True) <-> HttpServer
-  "tests/test_h2_extended_connect.mojo"      # RFC 8441 SETTINGS/parse (in-memory)
+  "tests/http2/test_h2_conn_handle.mojo"           # H2ConnHandle + PendingConnHandle recv/send
+  "tests/http/test_unified_http_server.mojo"      # full unified reactor over HTTP/1.1 + HTTP/2
+  "tests/http/test_unified_http_client.mojo"      # HttpClient h2c + auth FFI
+  "tests/http2/test_h2_server_handler.mojo"        # HttpClient(prefer_h2c=True) <-> HttpServer
+  "tests/http2/test_h2_extended_connect.mojo"      # RFC 8441 SETTINGS/parse (in-memory)
   # OwnedDLHandle borrow-helper discipline (post v0.7 b20951e). Each
   # of these tests exercises an FFI surface that was just refactored
   # to route every ``OwnedDLHandle.get_function`` + invocation through
@@ -82,23 +82,23 @@ ASAN_TESTS=(
   # vulnerable to). Verified clean during the b20951e gate; baking
   # them into the canonical inventory so future contributors get the
   # coverage by default.
-  "tests/test_hmac.mojo"                     # crypto FFI -- HMAC-SHA256 borrow helpers
-  "tests/test_session.mojo"                  # signed-cookie path through HMAC FFI
-  "tests/test_tls.mojo"                      # TLS client FFI (17 borrow helpers)
-  "tests/test_tls_acceptor.mojo"             # TLS server FFI (TlsAcceptor over OpenSSL)
-  "tests/test_tls_server_ffi.mojo"           # ServerCtx FFI (11 borrow helpers)
-  "tests/test_tls_resume.mojo"               # v0.7 TLS resumption: TlsSession lifetime + new_session_cb
-  "tests/test_ws.mojo"                       # SHA-1 FFI via compute_accept_key
-  "tests/test_ws_permessage_deflate.mojo"    # v0.7 — RFC 7692 codec (raw deflate / inflate FFI borrow)
+  "tests/crypto/test_hmac.mojo"                     # crypto FFI -- HMAC-SHA256 borrow helpers
+  "tests/http/test_session.mojo"                  # signed-cookie path through HMAC FFI
+  "tests/tls/test_tls.mojo"                      # TLS client FFI (17 borrow helpers)
+  "tests/tls/test_tls_acceptor.mojo"             # TLS server FFI (TlsAcceptor over OpenSSL)
+  "tests/tls/test_tls_server_ffi.mojo"           # ServerCtx FFI (11 borrow helpers)
+  "tests/tls/test_tls_resume.mojo"               # v0.7 TLS resumption: TlsSession lifetime + new_session_cb
+  "tests/ws/test_ws.mojo"                       # SHA-1 FFI via compute_accept_key
+  "tests/ws/test_ws_permessage_deflate.mojo"    # v0.7 — RFC 7692 codec (raw deflate / inflate FFI borrow)
 )
 TSAN_TESTS=(
   # Multicore + reactor (the only places we spawn pthreads)
-  "tests/test_thread_ffi.mojo"
-  "tests/test_scheduler.mojo"
-  "tests/test_handoff.mojo"
+  "tests/runtime/test_thread_ffi.mojo"
+  "tests/runtime/test_scheduler.mojo"
+  "tests/runtime/test_handoff.mojo"
   # Multi-worker WsServer (4-worker pthread fan-out with libc malloc'd
   # _WsWorkerCtx + UnsafePointer[ThreadHandle] storage)
-  "tests/test_ws_multicore.mojo"
+  "tests/ws/test_ws_multicore.mojo"
 )
 
 # Allow caller to override the test list.
