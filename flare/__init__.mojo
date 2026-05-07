@@ -65,13 +65,14 @@ HMAC-SHA256 signed cookies, and typed ``Session[T]`` stores.
 
 ```
 flare.io       - BufReader
-flare.ws       - WebSocket client + server (RFC 6455)
+flare.ws       - WebSocket client + server (RFC 6455, permessage-deflate,
+                 WS-over-h2 via RFC 8441 Extended CONNECT)
 flare.http2    - HTTP/2 frame codec + HPACK + h2c upgrade (RFC 9113 / 7541)
 flare.http     - HTTP/1.1 client + reactor server + Router / App /
                  extractors + middleware + Cors + FileServer +
                  forms + cookies + sessions + content-encoding
 flare.crypto   - HMAC-SHA256, base64url
-flare.tls      - TLS 1.2/1.3 (OpenSSL, client + server, ALPN)
+flare.tls      - TLS 1.2/1.3 (OpenSSL, client + server, ALPN, session resumption)
 flare.tcp      - TcpStream + TcpListener (IPv4 + IPv6)
 flare.udp      - UdpSocket (IPv4 + IPv6)
 flare.uds      - UnixListener + UnixStream (AF_UNIX sidecar IPC)
@@ -80,6 +81,10 @@ flare.net      - IpAddr, SocketAddr, RawSocket
 flare.runtime  - Reactor (kqueue / epoll, opt-in io_uring on Linux),
                  TimerWheel, Scheduler, HandoffQueue +
                  WorkerHandoffPool, BufferPool, vectored I/O
+flare.testing  - fork-and-serve helpers for cookbook examples and
+                 integration tests
+flare.utils    - POSIX FFI thunks (fork / waitpid / kill / usleep /
+                 exit / getpid) the Mojo stdlib doesn't expose yet
 ```
 
 Each layer only imports from layers below it. No circular dependencies.

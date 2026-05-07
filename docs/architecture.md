@@ -9,21 +9,25 @@ flare.ws       WebSocket client + server (RFC 6455). Multi-worker
                server via WsServer.serve(handler, num_workers=N)
                on a SO_REUSEPORT-shared port. WsClient.connect
                advertises ALPN ["http/1.1"] on wss:// to lock in
-               the existing Upgrade-based path. The RFC 8441
-               server-side byte driver (SETTINGS_ENABLE_CONNECT_
-               PROTOCOL=1, :protocol=websocket capture) is wired
-               in flare.http2; the WsConnection adapter that
-               bridges DATA frames to/from the H2 stream and the
-               matching WsClient h2 path are the documented
-               follow-ups.
+               the existing Upgrade-based path. RFC 8441
+               WebSocket-over-HTTP/2 (Extended CONNECT,
+               :protocol=websocket): server-side capture in
+               flare.http2 + WsOverH2Stream client-side
+               adapter that bridges DATA frames to/from
+               WsFrame. RFC 7692 permessage-deflate codec
+               (no_context_takeover by default, per-message
+               cap to bound zip-bomb risk).
 flare.http2    Low-level HTTP/2 byte drivers (RFC 9113 +
-               RFC 7541): Frame codec, HPACK enc/dec, stream
-               + connection state machines, H2Connection
-               (server byte driver), Http2ClientConnection
-               (client byte driver), h2c upgrade detection,
-               ALPN dispatch helper. Used by the unified
-               flare.http.HttpServer / HttpClient under the
-               hood; usable directly for custom dispatch.
+               RFC 7541): Frame codec, HPACK enc/dec (incl.
+               H=1 Huffman literals + SIMD-shim decoder),
+               stream + connection state machines,
+               H2Connection (server byte driver),
+               Http2ClientConnection (client byte driver,
+               with SETTINGS_ENABLE_CONNECT_PROTOCOL +
+               send_extended_connect for WS-over-h2),
+               h2c upgrade detection (preface peek + Upgrade
+               dance), per-stream RST_STREAM Cancel
+               propagation, ALPN dispatch helper.
 flare.http     HTTP/1.1 client + reactor server + Handler / Router / App
                + extractors (incl. Form / Multipart / Cookies)
                + ComptimeRouter + StaticResponse + Cancel / CancelHandler
@@ -31,16 +35,34 @@ flare.http     HTTP/1.1 client + reactor server + Handler / Router / App
                + Cors + FileServer (with HEAD + Range)
                + content-encoding (gzip + brotli)
                + signed cookies + typed Session[T] stores
+               + HTTP/1.1 trailers (parse + emit) + multi-listener
+               HttpServer.bind_many + HttpClient.with_pool
+               connection pool + h2c-via-Upgrade client.
+               Router is Copyable (refcounted struct-handler list)
+               and resolves the multi-worker overload directly.
 flare.crypto   HMAC-SHA256, base64url codec
-flare.tls      TLS 1.2/1.3 (OpenSSL); TlsAcceptor + ALPN
+flare.tls      TLS 1.2/1.3 (OpenSSL); TlsAcceptor + ALPN +
+               session resumption (RFC 5077 tickets / RFC 8446
+               §4.6.1 NewSessionTicket capture and replay).
 flare.tcp      TcpStream + TcpListener (IPv4 + IPv6)
 flare.udp      UdpSocket (IPv4 + IPv6)
+flare.uds      UnixListener + UnixStream (AF_UNIX sidecar IPC)
 flare.dns      getaddrinfo (dual-stack)
 flare.net      IpAddr, SocketAddr, RawSocket
 flare.runtime  Reactor (kqueue/epoll + EPOLLEXCLUSIVE), TimerWheel,
                Scheduler, HandoffQueue + WorkerHandoffPool,
                num_cpus / default_worker_count, pthread + pinning,
                install_drain_on_sigterm
+flare.testing  fork-and-serve helpers (`fork_server` /
+               `kill_forked_server`) for cookbook examples and
+               integration tests that need a real bound port
+               in a child process.
+flare.utils    POSIX FFI thunks (`fork` / `waitpid` / `kill` /
+               `usleep` / `exit` / `getpid` + SIGKILL / SIGTERM /
+               SIGINT) the Mojo stdlib doesn't expose yet.
+               Cross-cutting layer: pulled by tests, examples,
+               and `flare.testing` so each call site stops
+               re-declaring the same `external_call` thunks.
 ```
 
 ---

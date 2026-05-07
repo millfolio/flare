@@ -281,7 +281,7 @@ Round-trip examples for each (`basic/tcp_echo`, `basic/websocket_echo`, `basic/u
 
 ```
 flare.io       BufReader (Readable trait, generic buffered reader)
-flare.ws       WebSocket client + server (RFC 6455)
+flare.ws       WebSocket client + server (RFC 6455, permessage-deflate, WS-over-h2)
 flare.http     HTTP/1.1 client + reactor server + Cancel + Handler / Router / App
 flare.http2    HTTP/2 frame codec, HPACK, stream state, h2c upgrade
 flare.tls      TLS 1.2/1.3 (OpenSSL, both client and server)
@@ -290,6 +290,8 @@ flare.udp      UdpSocket (IPv4 + IPv6)
 flare.dns      getaddrinfo (dual-stack)
 flare.net      IpAddr, SocketAddr, RawSocket
 flare.runtime  Reactor (kqueue/epoll/io_uring), TimerWheel, Scheduler, Pool[T]
+flare.testing  fork-and-serve helpers for cookbook examples + integration tests
+flare.utils    POSIX FFI thunks (fork / waitpid / kill / usleep / exit / getpid)
 ```
 
 Each layer imports only from layers below it. No circular dependencies. The full request lifecycle, including the `Cancel` injection point and the per-connection state machine, lives in [`docs/architecture.md`](docs/architecture.md).

@@ -323,6 +323,15 @@ stability guarantee.
 
 ## Testing and fuzz coverage
 
+Test code reaches for two cross-cutting helper modules that the
+Mojo stdlib doesn't ship: `flare.testing` (`fork_server` /
+`kill_forked_server` — fork-and-serve so a single-process
+example can both serve and connect to itself) and `flare.utils`
+(POSIX FFI thunks: `fork` / `waitpid` / `kill` / `usleep` /
+`exit` / `getpid` plus `SIGKILL` / `SIGTERM` / `SIGINT`).
+Tests under [`tests/`](../tests/) mirror the package layout:
+`tests/{crypto,dns,http,http2,net,runtime,tcp,testing,tls,udp,uds,ws}/`.
+
 | | Count |
 |---|---|
 | Unit + integration tests | 600+ across `tests/` |
