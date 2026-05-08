@@ -66,7 +66,7 @@ def test_drop_prefix_keeps_trailing() raises:
 
 
 def test_drop_all_clears_buffer() raises:
-    """drop_n == len -> empty buffer, no crash."""
+    """``drop_n == len`` -> empty buffer, no crash."""
     var buf = List[UInt8]()
     for c in [ord("a"), ord("b"), ord("c")]:
         buf.append(UInt8(c))

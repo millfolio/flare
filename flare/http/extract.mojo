@@ -52,7 +52,7 @@ struct GetUser(Copyable, Defaultable, Handler, Movable):
 ```
 
 ``Extracted[H]`` is itself a ``Handler`` and reflects on ``H``'s field
-list via ``std.reflection.struct_field_count`` + ``trait_downcast``:
+list via ``reflect[H]().field_count()`` + ``trait_downcast``:
 per request, it default-constructs ``H``, walks each field with a
 ``comptime for`` loop, calls ``field.apply(req)`` through the
 ``Extractor`` trait, and invokes ``h.serve(req)``. No per-arity
@@ -75,7 +75,8 @@ Bad Request** with the error message in the body; the handler's
 ``serve`` is never called on a bad extraction.
 """
 
-from std.reflection import struct_field_count
+# reflect[T]() is auto-imported via the prelude in Mojo 1.0.0b1
+# (replaces the legacy struct_field_count free function).
 from std.builtin.rebind import trait_downcast
 from std.collections import Optional
 from json import loads, Value, Null
@@ -1071,7 +1072,7 @@ struct Extracted[H: Copyable & Defaultable & Handler & Movable](
     Per request:
 
     1. Default-construct ``H``.
-    2. For each field index ``idx`` in ``0..struct_field_count[H]()``:
+    2. For each field index ``idx`` in ``0..reflect[H]().field_count()``:
        downcast the field reference to ``Extractor`` and call
        ``apply(req)``. Each call raises on extractor failure.
     3. Call ``h.serve(req)``.
@@ -1099,7 +1100,7 @@ struct Extracted[H: Copyable & Defaultable & Handler & Movable](
 
     def serve(self, req: Request) raises -> Response:
         var h = Self.H()
-        comptime n = struct_field_count[Self.H]()
+        comptime n = reflect[Self.H]().field_count()
         var expose = req.expose_errors
         comptime for idx in range(n):
             try:

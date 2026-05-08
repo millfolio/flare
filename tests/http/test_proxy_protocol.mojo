@@ -440,7 +440,7 @@ def test_proxy_parse_error_v1_carries_version_and_phrase() raises:
 
 
 def test_proxy_parse_error_v2_carries_position() raises:
-    """v2 errors carry a byte offset for greppable logs."""
+    """V2 errors carry a byte offset for greppable logs."""
     var data = _v2_signature()
     data.append(UInt8(0x11))  # version=1, command=PROXY (wrong version)
     data.append(UInt8(0x11))

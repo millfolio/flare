@@ -164,7 +164,7 @@ def test_same_origin_rejects_cross_host() raises:
 
 
 def test_same_origin_rejects_cross_scheme() raises:
-    """https → http is treated as cross-origin (different scheme
+    """HTTPS → HTTP is treated as cross-origin (different scheme
     means different security context)."""
     var p = RedirectPolicy.same_origin_only()
     var d = p.decide(
