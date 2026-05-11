@@ -324,8 +324,9 @@ struct Scheduler[H: Handler & Copyable](Movable):
           via ``bind_shared`` and registered with
           ``Reactor.register_exclusive`` (``EPOLLEXCLUSIVE`` on
           Linux >= 4.5) -- the kernel wakes one worker per
-          accept event, idle workers absorb spikes, p99.99 is
-          ~0.25 ms tighter for ~17 % less req/s (see
+          accept event, idle workers absorb spikes, p99.99 σ
+          is uniformly tighter under sustained load for 7-22 %
+          less req/s depending on path (see
           ``docs/benchmark.md``). The io_uring buffer-ring path
           (``FLARE_BUFRING_HANDLER=1``) uses per-worker
           SO_REUSEPORT unconditionally.
@@ -995,8 +996,9 @@ struct StaticScheduler(Movable):
       actix_web's listener strategy).
     - ``FLARE_REUSEPORT_WORKERS=0``: opt back into a single
       shared listener via ``bind_shared``, borrowed by every
-      worker and registered with ``EPOLLEXCLUSIVE`` (~17 % less
-      req/s for ~0.25 ms tighter p99.99 on this dev-box).
+      worker and registered with ``EPOLLEXCLUSIVE`` (7-22 %
+      less req/s for a uniformly tighter p99.99 σ under
+      sustained load; see ``docs/benchmark.md``).
 
     Use ``StaticScheduler.start(addr, config, resp, num_workers)`` to
     launch and ``shutdown()`` to drain. Same lifecycle contract as
@@ -1076,11 +1078,12 @@ struct StaticScheduler(Movable):
         # and gives the highest steady-state throughput on
         # dev-box workloads. ``FLARE_REUSEPORT_WORKERS=0``
         # opts back into the single shared listener with
-        # EPOLLEXCLUSIVE — strictly tighter p99.99 (kernel
-        # offers each accept to whichever worker is currently
-        # parked in epoll_wait, idle workers absorb spikes)
-        # for ~17 % less req/s. See ``docs/benchmark.md`` for
-        # the head-to-head numbers.
+        # EPOLLEXCLUSIVE — strictly tighter p99.99 σ under
+        # sustained load (kernel offers each accept to whichever
+        # worker is currently parked in epoll_wait, idle workers
+        # absorb spikes) for 7-22 % less req/s depending on
+        # path. See ``docs/benchmark.md`` for the head-to-head
+        # numbers.
         var use_reuseport_workers = True
         if getenv("FLARE_REUSEPORT_WORKERS") == "0":
             use_reuseport_workers = False

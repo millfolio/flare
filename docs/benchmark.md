@@ -197,8 +197,9 @@ with `EPOLLEXCLUSIVE` (Linux >= 4.5). Under the shared-listener
 mode the kernel wakes exactly one waiter per accept event in
 FIFO order across workers blocked in `epoll_wait`, so a worker
 actively running a handler is not woken -- fair-by-construction
-across *idle* workers. That mode trades ~17% req/s for ~0.25 ms
-tighter p99.99; useful when the workload has bursty arrival
+across *idle* workers. That mode trades 7-22% req/s (handler vs
+static fast path) for a uniformly tighter p99.99 σ under
+sustained load; useful when the workload has bursty arrival
 that can stack on one reuseport listener. See the
 [Listener-mode A/B](#listener-mode-ab-flare-only) section for
 the head-to-head numbers in both modes.
@@ -477,11 +478,11 @@ Picking a mode:
   the kernel offers each accept event to whichever worker
   is currently parked in `epoll_wait`. Idle workers absorb
   spikes; busy workers aren't burdened with extra accepts.
-  Strictly tighter p99.99 (3.23 ms in the historical
-  CPU-pinned reference, where actix_web's per-worker
-  reuseport hits 21.61 ms p99.99 from listener-distribution
-  variance). Trades ~17 % req/s for ~0.25 ms tighter
-  p99.99.
+  Strictly tighter p99.99 σ under sustained load (3.23 ms
+  median in the historical CPU-pinned reference, where
+  actix_web's per-worker reuseport hits 21.61 ms p99.99
+  from listener-distribution variance). Trades 7-22 % req/s
+  (handler vs static fast path) for that tighter tail.
 
 **1-worker frameworks** (single-thread reactor / event loop):
 

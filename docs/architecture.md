@@ -170,10 +170,12 @@ its own timer wheel, its own per-connection state.
   via `bind_shared` and borrowed by every worker, registered
   with `Reactor.register_exclusive` so the kernel wakes one
   worker per accept event (Linux >= 4.5; macOS degrades to
-  plain `register`). Tighter p99.99 because idle workers
-  absorb spikes; busy workers aren't burdened with extra
-  accepts. Trades ~17 % req/s for ~0.25 ms tighter p99.99 on
-  unpinned dev-boxes.
+  plain `register`). Idle workers absorb spikes; busy workers
+  aren't burdened with extra accepts. Trades 7–22 % req/s
+  (handler vs static fast path) for a uniformly tighter p99.99
+  σ across both paths under sustained load — see
+  [`docs/benchmark.md`](benchmark.md#listener-mode-ab-flare-only)
+  for the head-to-head numbers.
 
 `pin_cores=True` (default) pins worker `i` to core `i % num_cpus()`
 on Linux via `pthread_setaffinity_np`. macOS does not expose CPU

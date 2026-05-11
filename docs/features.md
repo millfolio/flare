@@ -301,7 +301,7 @@ request id but never echoed to the client. See
 
 | Env var | Effect |
 |---|---|
-| `FLARE_REUSEPORT_WORKERS=0` | Switch from per-worker `SO_REUSEPORT` to shared-listener `EPOLLEXCLUSIVE` shape (~17 % less req/s, ~0.25 ms tighter p99.99) |
+| `FLARE_REUSEPORT_WORKERS=0` | Switch from per-worker `SO_REUSEPORT` to shared-listener `EPOLLEXCLUSIVE` shape (7–22 % less req/s depending on path, uniformly tighter p99.99 σ under sustained load) |
 | `FLARE_BUFRING_HANDLER=1` | Opt into `io_uring` reactor on Linux ≥ 6.0; auto-fallback to `epoll` |
 | `FLARE_SOAK_WORKERS=on` | Enable cross-worker `WorkerHandoffPool` for skewed-keepalive workloads |
 | `SOAK_DURATION_SECS=<n>` | Override default soak harness duration (`pixi run --environment bench bench-soak-*`) |

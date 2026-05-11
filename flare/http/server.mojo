@@ -414,7 +414,8 @@ struct HttpServer(Movable):
           ``FLARE_REUSEPORT_WORKERS=0`` before launch to switch
           back to the single shared listener with
           ``EPOLLEXCLUSIVE`` (Linux >= 4.5), which trades
-          ~17 % req/s for ~0.25 ms tighter p99.99; see
+          7-22 % req/s (handler vs static fast path) for a
+          uniformly tighter p99.99 σ under sustained load; see
           ``docs/benchmark.md``.
 
         For Router / middleware / stateful-struct handlers, use the
@@ -949,8 +950,9 @@ struct HttpServer(Movable):
         actix_web's listener strategy). Export
         ``FLARE_REUSEPORT_WORKERS=0`` before launch to switch
         back to a single shared listener with
-        ``EPOLLEXCLUSIVE`` -- trades ~17 % req/s for ~0.25 ms
-        tighter p99.99; see ``docs/benchmark.md``.
+        ``EPOLLEXCLUSIVE`` -- trades 7-22 % req/s (handler vs
+        static fast path) for a uniformly tighter p99.99 σ
+        under sustained load; see ``docs/benchmark.md``.
 
         Caller is expected to hold the StaticScheduler reference
         returned via ``self._stopping`` indirectly -- in practice,

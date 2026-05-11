@@ -40,7 +40,8 @@ workers behind per-worker ``SO_REUSEPORT`` listeners by default
 (matches actix_web's listener strategy and gives the highest
 steady-state throughput). Set ``FLARE_REUSEPORT_WORKERS=0`` to
 opt into the single shared listener with ``EPOLLEXCLUSIVE`` --
-trades ~17 % req/s for ~0.25 ms tighter p99.99. See
+trades 7-22 % req/s (handler vs static fast path) for a
+uniformly tighter p99.99 tail under sustained load. See
 ``docs/benchmark.md`` for the head-to-head numbers. Static
 endpoints can skip the parser entirely with
 ``serve_static(resp)``.
@@ -273,8 +274,9 @@ listeners; matches actix_web's listener strategy and gives
 the highest steady-state throughput on dev-box workloads).
 Export ``FLARE_REUSEPORT_WORKERS=0`` before launch to
 opt back into the single shared listener with
-``EPOLLEXCLUSIVE`` -- ~17 % less req/s for ~0.25 ms tighter
-p99.99 (the kernel offers each accept event to whichever
+``EPOLLEXCLUSIVE`` -- 7-22 % less req/s (handler vs static
+fast path) for a uniformly tighter p99.99 σ under sustained
+load (the kernel offers each accept event to whichever
 worker is currently parked in ``epoll_wait``, so idle
 workers absorb spikes). See [``docs/benchmark.md``](../docs/benchmark.md)
 for the head-to-head numbers and the rationale.
