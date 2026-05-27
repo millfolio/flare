@@ -13,33 +13,42 @@ Why a sibling type rather than ``Response[B: Body]`` parametric:
 
 The plan's preferred shape was ``Response = Response[InlineBody]``
 type alias with the existing helpers (``ok``, ``not_found``,
-...) returning the alias. Investigation in this Mojo nightly
-showed that:
+...) returning the alias.
+
+**v0.8 re-probe outcome:** the parametric alias *does* compile
+cleanly on the v0.8-pinned Mojo nightly (``ParametricResponse[InlineBody]``
++ ``ParametricResponse[ChunkedBody[Source]]`` both parse and
+specialise without the alias-with-default-parameter issue v0.7
+ran into). The blocker is no longer compiler support; it is
+migration churn:
 
 1. Making ``Response`` parametric requires changing every
    ``Response(status=..., body=List[UInt8](...))`` constructor
    call across the codebase (~50+ callsites in tests, examples,
    and the reactor). The constructor arguments would need to
    shift from ``List[UInt8]`` to a ``Body`` impl.
-2. Mojo's alias-with-default-parameter for traits-bounded
-   parameters has not been verified clean for this nightly —
-   the C3 commit hit a separate specialisation slowness on
-   ``ViewHandler.serve_view[origin]`` that suggests parametric
-   dispatch costs add up.
-3. The plan explicitly documents this fallback: "If Mojo's
-   alias-with-default-parameter doesn't compile cleanly in
-   this nightly, the fallback is a sibling
-   ``StreamingResponse[B]`` type."
+2. The migration touches the public API: every user that wrote
+   ``def handler() raises -> Response`` would need to either
+   keep using the alias form or accept ``Response[InlineBody]``
+   verbatim. The alias is non-breaking but the type-erasure
+   would surface in error messages.
+3. The sibling type works today and is opt-in -- handlers that
+   want streaming return ``StreamingResponse[ChunkedBody[Source]]``;
+   handlers that don't aren't affected.
+
+**Decision for v0.8:** keep the sibling type. The end-user shape
+is identical to the planned parametric ``Response[B]``; only
+the public name differs. The migration is queued for v0.9
+alongside the QUIC server work, where the response abstraction
+will need to grow anyway (h3 frames vs h2 frames vs h1 wire
+chunks) and a single parametric type makes that grow honestly
+rather than via three sibling types.
 
 ``StreamingResponse[B]`` is fully additive: every existing
 handler / helper / test / example continues to use ``Response``
 unchanged. Handlers that want streaming opt in by returning a
 ``StreamingResponse[ChunkedBody[Source]]`` from a
-``StreamingHandler`` (lands in C5 alongside the reactor pull
-loop). The end-user shape is identical to the planned
-parametric ``Response[B]``; only the public name differs.
-
-Closes the contract portion of Track 4 part 1.
+``StreamingHandler``.
 
 Example:
 

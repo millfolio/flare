@@ -338,5 +338,123 @@ def test_template_error_constants_have_distinct_variants() raises:
     )
 
 
+# ── Inheritance (v0.8 Track J): {% block %} + {% extends %} ───────────────
+
+
+def test_block_default_content_renders_when_no_override() raises:
+    """A bare ``{% block %}`` with no parent context renders
+    its default content verbatim."""
+    var t = Template.compile(
+        String("Hi {% block name %}stranger{% endblock %}!")
+    )
+    var ctx = TemplateContext()
+    assert_equal(t.render(ctx), String("Hi stranger!"))
+
+
+def test_extends_target_parsed_from_source_with_quotes() raises:
+    """``{% extends "base" %}`` strips the quotes; the bare
+    name lives in :attr:`Template.extends_target`."""
+    var c = Template.compile(
+        String('{% extends "base.html" %}{% block t %}hi{% endblock %}')
+    )
+    assert_equal(c.extends_target, String("base.html"))
+    # Single-quote variant is equivalent.
+    var c2 = Template.compile(
+        String("{% extends 'base.html' %}{% block t %}hi{% endblock %}")
+    )
+    assert_equal(c2.extends_target, String("base.html"))
+
+
+def test_extends_target_unset_when_no_extends_tag() raises:
+    """Templates without ``{% extends %}`` have an empty
+    ``extends_target`` field."""
+    var t = Template.compile(String("hi {{ name }}"))
+    assert_equal(t.extends_target, String(""))
+
+
+def test_child_overrides_parent_block_via_render_extending() raises:
+    """The child's ``{% block %}`` body replaces the parent's
+    same-named default when rendering through
+    :func:`render_extending`."""
+    var parent = Template.compile(
+        String(
+            "<title>{% block title %}default{% endblock %}</title>"
+            "<body>{% block body %}hello{% endblock %}</body>"
+        )
+    )
+    var child = Template.compile(
+        String(
+            '{% extends "base" %}'
+            "{% block title %}Custom{% endblock %}"
+        )
+    )
+    var ctx = TemplateContext()
+    assert_equal(
+        child.render_extending(ctx, parent),
+        String("<title>Custom</title><body>hello</body>"),
+    )
+
+
+def test_render_without_extending_returns_block_defaults_only() raises:
+    """A child rendered via plain ``render`` emits only its own
+    block defaults; the parent's surrounding markup is not
+    consulted (the renderer never sees the parent)."""
+    var child = Template.compile(
+        String(
+            '{% extends "base" %}'
+            "{% block title %}Custom{% endblock %}"
+        )
+    )
+    var ctx = TemplateContext()
+    # The child's own ``nodes`` contains the literal ``{% block title %}``
+    # tree -- which renders its default content of ``Custom``.
+    assert_equal(child.render(ctx), String("Custom"))
+
+
+def test_extends_malformed_raises() raises:
+    """``{% extends %}`` with the wrong operand count raises a
+    typed error rather than silently ignoring the tag."""
+    var got_variant = 0
+    try:
+        var _t = Template.compile(
+            String('{% extends "a" "b" %}{% block t %}hi{% endblock %}')
+        )
+    except e:
+        got_variant = e._variant
+    # MALFORMED_FOR shares variant 7 with the extends-operand
+    # check -- a single ``MALFORMED_TAG``-style code keeps the
+    # error surface narrow.
+    assert_true(got_variant == TemplateError.MALFORMED_FOR._variant)
+
+
+def test_endblock_without_block_raises_unmatched_end() raises:
+    """A stray ``{% endblock %}`` is rejected just like a stray
+    ``{% endif %}`` / ``{% endfor %}``."""
+    var got_variant = 0
+    try:
+        var _t = Template.compile(String("{% endblock %}"))
+    except e:
+        got_variant = e._variant
+    assert_true(got_variant == TemplateError.UNMATCHED_END._variant)
+
+
+def test_block_inside_for_loop_renders_default_per_iteration() raises:
+    """Blocks nested inside a ``{% for %}`` participate in the
+    loop: the block default is rendered once per iteration."""
+    var t = Template.compile(
+        String(
+            "{% for x in xs %}"
+            "<li>{% block item %}{{ x }}{% endblock %}</li>"
+            "{% endfor %}"
+        )
+    )
+    var ctx = TemplateContext()
+    var xs = List[String]()
+    xs.append(String("a"))
+    xs.append(String("b"))
+    ctx.set_list(String("xs"), xs)
+    assert_equal(t.render(ctx), String("<li>a</li><li>b</li>"))
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

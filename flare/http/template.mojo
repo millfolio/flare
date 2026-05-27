@@ -1,26 +1,33 @@
 """Tiny tag-based template engine.
 
-Askama-shape minimal subset. Supports the three tags that
-cover ~90% of HTML / email / config templating use:
+Askama-shape minimal subset. Supports the five tags that
+cover ~95% of HTML / email / config templating use:
 
-* ``{{ name }}`` — variable substitution (HTML-escaped by
+* ``{{ name }}`` -- variable substitution (HTML-escaped by
   default; ``{{ name | safe }}`` opts out).
-* ``{% if name %}...{% endif %}`` — boolean conditional;
+* ``{% if name %}...{% endif %}`` -- boolean conditional;
   ``name`` is truthy iff non-empty (matches Jinja2 semantics
   for ``string`` truthiness which is the most-common-by-far
   use).
-* ``{% for x in name %}...{% endfor %}`` — loop over a
+* ``{% for x in name %}...{% endfor %}`` -- loop over a
   list-typed context value; each iteration shadows ``x`` for
   the body.
+* ``{% block <name> %}...{% endblock %}`` -- named region with
+  default content. Child templates override matching blocks
+  via the ``extends`` mechanism below.
+* ``{% extends "<parent>" %}`` -- declares this template a
+  child of ``<parent>``. Must be the first non-whitespace tag.
+  Render through :func:`Template.render_extending(ctx, parent)`
+  so the renderer walks the parent's surrounding markup and
+  pulls block content from the child.
 
 Out of scope (potential future additions):
 
-- Template inheritance / blocks (``{% block %}`` /
-  ``{% extends %}``).
 - Filters beyond ``| safe`` (``| upper``, ``| length``, etc.).
 - ``{% else %}`` branches.
 - Whitespace control flags (``{%- ... -%}``).
 - Macros / includes.
+- Multi-level inheritance (parent extending grandparent).
 
 Type model:
 
@@ -229,6 +236,13 @@ comptime _NODE_VAR: Int = 1
 comptime _NODE_VAR_SAFE: Int = 2
 comptime _NODE_IF: Int = 3
 comptime _NODE_FOR: Int = 4
+comptime _NODE_BLOCK: Int = 5
+"""``{% block <name> %}...{% endblock %}`` placeholder.
+``name`` is the block name; ``children`` is the *default*
+content used when no child template overrides it. Renderers
+walking a parent's tree consult the active child template's
+``blocks`` map first and fall back to ``children`` when the
+child did not override the block."""
 
 
 @fieldwise_init
@@ -249,6 +263,10 @@ struct TemplateNode(Copyable, Movable):
     - ``_NODE_FOR``: ``loop_var`` is the per-iteration name,
       ``name`` is the iterable variable, ``children`` is the
       body rendered once per element.
+    - ``_NODE_BLOCK``: ``name`` is the block name; ``children``
+      is the default content. Renderers swap ``children`` for
+      a child template's override when the same name is found
+      in :attr:`Template.blocks`.
     """
 
     var kind: Int
@@ -300,6 +318,24 @@ struct TemplateContext(Copyable, Defaultable, Movable):
 # either return the value (if the key was checked first via
 # ``__contains__``) or convert to a TemplateError.UNKNOWN_NODE
 # internal error.
+
+
+def _dict_get_blocks(
+    d: Dict[String, List[TemplateNode]], name: String
+) raises TemplateError -> List[TemplateNode]:
+    """Look up a block override list after a ``__contains__``
+    check. Mirrors :func:`_dict_get_string` for the inheritance
+    map; absorbs Mojo's typed ``DictKeyError`` and re-raises as
+    ``UNKNOWN_NODE`` on internal-state corruption."""
+    try:
+        return d[name].copy()
+    except _e:
+        raise TemplateError(
+            _variant=12,
+            detail=String("internal: block-override read failed for '")
+            + name
+            + String("'"),
+        )
 
 
 def _dict_get_string(
@@ -501,7 +537,34 @@ def _parse_segment(
                         children^,
                     )
                 )
-            elif head == String("endif") or head == String("endfor"):
+            elif head == String("block"):
+                # ``{% block <name> %}...{% endblock %}`` -- one
+                # operand (the block name); the body is the
+                # default content rendered when no child template
+                # overrides this block.
+                if len(tokens) != 2:
+                    raise TemplateError(
+                        _variant=6,
+                        detail=String("block: expected one operand, got ")
+                        + String(len(tokens) - 1),
+                    )
+                var block_name = tokens[1].copy()
+                var children = _parse_segment(src, pos, _list("endblock"))
+                pos = _skip_tag(src, pos)
+                out.append(
+                    TemplateNode(
+                        _NODE_BLOCK,
+                        String(""),
+                        block_name^,
+                        String(""),
+                        children^,
+                    )
+                )
+            elif (
+                head == String("endif")
+                or head == String("endfor")
+                or head == String("endblock")
+            ):
                 raise TemplateError(_variant=8, detail=head.copy())
             else:
                 raise TemplateError(_variant=9, detail=head.copy())
@@ -616,7 +679,9 @@ def _skip_tag(src: String, pos: Int) raises TemplateError -> Int:
 
 
 def _render_nodes(
-    nodes: List[TemplateNode], mut ctx: TemplateContext
+    nodes: List[TemplateNode],
+    mut ctx: TemplateContext,
+    child_blocks: Dict[String, List[TemplateNode]],
 ) raises TemplateError -> String:
     var out = String(capacity=256)
     for i in range(len(nodes)):
@@ -629,7 +694,7 @@ def _render_nodes(
             out += _lookup_string(ctx, node.name)
         elif node.kind == _NODE_IF:
             if _truthy(ctx, node.name):
-                out += _render_nodes(node.children, ctx)
+                out += _render_nodes(node.children, ctx, child_blocks)
         elif node.kind == _NODE_FOR:
             if not ctx.lists.__contains__(node.name):
                 raise TemplateError(_variant=11, detail=node.name.copy())
@@ -640,17 +705,121 @@ def _render_nodes(
                 if prior_present:
                     prior_value = _dict_get_string(ctx.strings, node.loop_var)
                 _dict_set_string(ctx.strings, node.loop_var, seq[k])
-                out += _render_nodes(node.children, ctx)
+                out += _render_nodes(node.children, ctx, child_blocks)
                 if prior_present:
                     _dict_set_string(ctx.strings, node.loop_var, prior_value)
                 else:
                     _dict_pop_string(ctx.strings, node.loop_var)
+        elif node.kind == _NODE_BLOCK:
+            # ``_NODE_BLOCK``: render the child's override if
+            # present, else fall back to the block's default
+            # content (its own ``children``). The block placeholder
+            # name resolution is single-pass; we deliberately do
+            # not recurse into child-of-child overrides because
+            # the inheritance model is single-level (per the
+            # struct docstring).
+            if child_blocks.__contains__(node.name):
+                # Render the child's override with an *empty*
+                # blocks map so any block tags nested inside the
+                # override resolve to their own defaults instead
+                # of looping back into the child registry.
+                var override = _dict_get_blocks(child_blocks, node.name)
+                var empty = Dict[String, List[TemplateNode]]()
+                out += _render_nodes(override, ctx, empty)
+            else:
+                var empty2 = Dict[String, List[TemplateNode]]()
+                out += _render_nodes(node.children, ctx, empty2)
         else:
             raise TemplateError(
                 _variant=12,
                 detail=String("kind=") + String(node.kind),
             )
     return out^
+
+
+# ── Inheritance helpers ───────────────────────────────────────────
+
+
+def _detect_extends(
+    src: String, mut pos: Int
+) raises TemplateError -> String:
+    """Look for a leading ``{% extends "<name>" %}`` tag. If
+    found, advance ``pos`` past it and return the parent
+    template name (the bare token without quotes). If absent,
+    return the empty string and leave ``pos`` at zero.
+
+    The tag is only honoured when it is the first non-whitespace
+    content in the source -- this matches Jinja2's contract and
+    keeps the inheritance dispatch one-shot.
+    """
+    # Skip leading whitespace bytes only; any actual content
+    # (non-whitespace literal text) means no extends.
+    var n = src.byte_length()
+    var scan = 0
+    while scan < n:
+        var b = ord(_slice(src, scan, scan + 1))
+        if b != 0x20 and b != 0x09 and b != 0x0A and b != 0x0D:
+            break
+        scan += 1
+    if scan >= n:
+        return String("")
+    # Must start with ``{%`` to be a candidate tag.
+    if scan + 2 > n:
+        return String("")
+    var open2 = _slice(src, scan, scan + 2)
+    if open2 != String("{%"):
+        return String("")
+    var close = _find_close(src, scan + 2, "%}")
+    if close < 0:
+        return String("")
+    var raw = _strip(_slice(src, scan + 2, close))
+    var tokens = _split_ws(raw)
+    if len(tokens) == 0 or tokens[0] != String("extends"):
+        return String("")
+    if len(tokens) != 2:
+        raise TemplateError(
+            _variant=7,
+            detail=String("extends: expected one operand, got ")
+            + String(len(tokens) - 1),
+        )
+    var target = tokens[1].copy()
+    # Strip surrounding quotes if present (``"name"`` -> ``name``);
+    # both single and double quotes are accepted to match common
+    # editor / linter expectations. Mismatched quotes are left as
+    # part of the name (the caller's registry lookup will fail
+    # with a clearer error than a parser-level guess).
+    var tlen = target.byte_length()
+    if tlen >= 2:
+        var first = _slice(target, 0, 1)
+        var last = _slice(target, tlen - 1, tlen)
+        if (first == String('"') and last == String('"')) or (
+            first == String("'") and last == String("'")
+        ):
+            target = _slice(target, 1, tlen - 1)
+    pos = close + 2
+    return target^
+
+
+def _collect_blocks(
+    nodes: List[TemplateNode],
+    mut out: Dict[String, List[TemplateNode]],
+):
+    """Walk a parsed tree and populate ``out`` with every
+    ``{% block %}`` definition encountered (top-level + nested).
+
+    Used at compile-time to build :attr:`Template.blocks`. Nested
+    blocks are flattened into the same map by name; a duplicate
+    name silently overwrites the earlier definition. Authors
+    relying on duplicate-block detection should lint at the
+    template-authoring layer, not at parse-time.
+    """
+    for i in range(len(nodes)):
+        var node = nodes[i].copy()
+        if node.kind == _NODE_BLOCK:
+            out[node.name.copy()] = node.children.copy()
+            _collect_blocks(node.children, out)
+        elif node.kind == _NODE_IF or node.kind == _NODE_FOR:
+            _collect_blocks(node.children, out)
 
 
 def _lookup_string(
@@ -684,9 +853,46 @@ struct Template(Copyable, Movable):
     compile step is O(N) in source length; the render step is
     O(M) in output length (one pass over the parsed tree, one
     HTML-escape pass per ``{{ var }}``).
+
+    Inheritance support (v0.8):
+
+    - ``{% extends "<name>" %}`` as the *first* non-whitespace
+      tag marks this template as a child of another. The parsed
+      ``extends_target`` field holds the parent's name.
+    - ``{% block <name> %}...{% endblock %}`` defines a named
+      region. The block's body is the default content; child
+      templates override it by declaring a same-named block.
+    - Render with inheritance via :func:`render_extending` --
+      pass the parent template alongside the context. The
+      renderer walks the parent's tree; each ``_NODE_BLOCK``
+      pulls its content from the child's :attr:`blocks` map if
+      a matching name exists, otherwise renders the parent's
+      default.
+
+    Inheritance is single-level: the parent is not itself
+    expected to extend a grandparent. Transitive extends adds
+    code without buying enough use-case coverage to justify
+    the complexity in v0.8.
     """
 
     var nodes: List[TemplateNode]
+    """Top-level parse tree. Always present even for child
+    templates that ``extend`` -- a child's nodes still contain
+    its own block definitions for resolution against the
+    parent's placeholders."""
+
+    var extends_target: String
+    """Name of the parent template if ``{% extends "..." %}``
+    was present, else the empty string. Look-up is the caller's
+    responsibility (file system, in-memory registry, etc.) --
+    the engine intentionally has no path resolver."""
+
+    var blocks: Dict[String, List[TemplateNode]]
+    """Named-block override map. Populated at compile-time from
+    each ``{% block <name> %}`` encountered. When this template
+    is the *child* in an extends relationship, the renderer
+    consults this map first before falling back to the parent's
+    block defaults."""
 
     @staticmethod
     def compile(src: String) raises TemplateError -> Template:
@@ -694,20 +900,29 @@ struct Template(Copyable, Movable):
 
         Raises :class:`TemplateError` (variant indicates which):
 
-        - ``UNTERMINATED_VAR`` — unterminated ``{{...}}``
-        - ``UNTERMINATED_TAG`` — unterminated ``{%...%}``
-        - ``UNMATCHED_END`` — unmatched ``{% endif %}`` /
-          ``{% endfor %}``
-        - ``EMPTY_VAR`` — empty variable name in ``{{...}}``
-        - ``EMPTY_TAG`` — empty ``{% %}``
-        - ``UNKNOWN_FILTER`` — only ``| safe`` is accepted
-        - ``MALFORMED_IF`` — wrong operand count
-        - ``MALFORMED_FOR`` — ``{% for X in Y %}`` shape violated
-        - ``UNKNOWN_TAG`` — unrecognised tag head
+        - ``UNTERMINATED_VAR`` -- unterminated ``{{...}}``
+        - ``UNTERMINATED_TAG`` -- unterminated ``{%...%}``
+        - ``UNMATCHED_END`` -- unmatched ``{% endif %}`` /
+          ``{% endfor %}`` / ``{% endblock %}``
+        - ``EMPTY_VAR`` -- empty variable name in ``{{...}}``
+        - ``EMPTY_TAG`` -- empty ``{% %}``
+        - ``UNKNOWN_FILTER`` -- only ``| safe`` is accepted
+        - ``MALFORMED_IF`` -- wrong operand count
+        - ``MALFORMED_FOR`` -- ``{% for X in Y %}`` shape violated
+        - ``MALFORMED_EXTENDS`` -- ``{% extends X %}`` shape
+          violated (also raised when ``extends`` is not the
+          first non-whitespace tag).
+        - ``UNKNOWN_TAG`` -- unrecognised tag head
         """
         var pos = 0
+        var extends_target: String
+        extends_target = _detect_extends(src, pos)
+        # If extends was detected, ``pos`` advanced past the
+        # ``{% extends %}`` tag inside the helper.
         var nodes = _parse_segment(src, pos, List[String]())
-        return Template(nodes^)
+        var blocks = Dict[String, List[TemplateNode]]()
+        _collect_blocks(nodes, blocks)
+        return Template(nodes^, extends_target^, blocks^)
 
     def render(self, mut ctx: TemplateContext) raises TemplateError -> String:
         """Walk the parsed tree against ``ctx``, returning the
@@ -718,13 +933,43 @@ struct Template(Copyable, Movable):
         shadowing and restoration. After ``render`` returns,
         ``ctx`` is left exactly as it was before the call.
 
+        For child templates that ``{% extends %}`` a parent,
+        use :func:`render_extending` instead -- a child rendered
+        through this method emits its block defaults only, the
+        parent's surrounding markup is *not* consulted.
+
         Raises :class:`TemplateError` (variant indicates which):
 
-        - ``UNBOUND_VARIABLE`` — ``{{ name }}`` for a name not
+        - ``UNBOUND_VARIABLE`` -- ``{{ name }}`` for a name not
           in ``ctx.strings``.
-        - ``UNBOUND_ITERABLE`` — ``{% for x in name %}`` for a
+        - ``UNBOUND_ITERABLE`` -- ``{% for x in name %}`` for a
           name not in ``ctx.lists``.
-        - ``UNKNOWN_NODE`` — internal: parsed tree contained a
+        - ``UNKNOWN_NODE`` -- internal: parsed tree contained a
           node kind the renderer doesn't handle.
         """
-        return _render_nodes(self.nodes, ctx)
+        var empty = Dict[String, List[TemplateNode]]()
+        return _render_nodes(self.nodes, ctx, empty)
+
+    def render_extending(
+        self, mut ctx: TemplateContext, parent: Template
+    ) raises TemplateError -> String:
+        """Render this child template against the parent's
+        surrounding markup. The renderer walks ``parent.nodes``;
+        each ``{% block X %}`` placeholder is satisfied by
+        ``self.blocks[X]`` when present, otherwise by the
+        parent's default content.
+
+        Args:
+            ctx: Template variable bag (mutable borrow; restored
+                across loop / block frames).
+            parent: The compiled parent template. Typically
+                loaded by name via the caller's registry; the
+                engine has no built-in resolver.
+
+        Returns:
+            The rendered output.
+
+        Raises:
+            TemplateError: Same conditions as :func:`render`.
+        """
+        return _render_nodes(parent.nodes, ctx, self.blocks)

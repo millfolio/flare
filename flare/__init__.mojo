@@ -516,7 +516,14 @@ def main() raises:
 from .errors import IoError, ValidationError
 from .http.auth_extract import AuthError
 from .http.proxy_protocol import ProxyParseError
-from .http.template import TemplateError
+from .http.template import Template, TemplateContext, TemplateError
+from .http.sse import (
+    SseChannel,
+    SseEvent,
+    SseStreamingResponse,
+    format_sse_event,
+    sse_response,
+)
 from .net.address import IpAddr, SocketAddr
 from .http.server import (
     HttpServer,
