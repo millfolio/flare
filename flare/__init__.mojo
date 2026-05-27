@@ -730,6 +730,15 @@ from .http.middleware import (
     RequestId,
     negotiate_encoding,
 )
+from .http.cache import (
+    CacheControl,
+    CacheEntry,
+    CacheKey,
+    CacheStore,
+    InMemoryCacheStore,
+    derive_cache_key,
+    parse_cache_control,
+)
 from .http.cors import Cors, CorsConfig
 from .http.fs import ByteRange, FileServer, parse_range
 from .http.error import HttpError, TooManyRedirects
