@@ -161,7 +161,7 @@ by nesting structs:
 | `HeaderMap`, `HeaderInjectionError`, `HeaderMapView`, `parse_header_view` | `flare.http.{headers,header_view}` |
 | `StaticResponse`, `precompute_response` — pre-encoded wire form for fixed-body endpoints | [`static_response.mojo`](../examples/intermediate/static_response.mojo) |
 | `SseEvent`, `SseChannel` (in-memory FIFO + cancel-aware `ChunkSource` wrapper), `format_sse_event`, `sse_response`, `SseStreamingResponse[B]` | [`sse.mojo`](../examples/intermediate/sse.mojo) |
-| Askama-shape templates: `{{ name }}` (HTML-escaped, `| safe` opt-out), `{% if %}...{% endif %}`, `{% for x in name %}...{% endfor %}`, `TemplateError` | `flare.http.template` |
+| Askama-shape templates: `{{ name }}` (HTML-escaped, `| safe` opt-out), `{% if %}...{% endif %}`, `{% for x in name %}...{% endfor %}`, single-level inheritance via `{% block <name> %}...{% endblock %}` + `{% extends "<parent>" %}` (rendered via `Template.render_extending(ctx, parent)`), `TemplateError` | `flare.http.template`, [`template_inheritance.mojo`](../examples/intermediate/template_inheritance.mojo) |
 | `ByteRange`, `parse_range`, `FileServer` (see [Middleware](#middleware)) | `flare.http.fs` |
 
 ## Observability
@@ -209,7 +209,9 @@ own dispatch loop.
 | `WsFrame`, `WsOpcode`, `WsCloseCode`, `WsProtocolError` — low-level frame surface | `flare.ws.frame` |
 | Mandatory client-mask validation, UTF-8 validation on text frames (RFC 6455) | `flare.ws.frame` |
 | WS-over-HTTP/2 (RFC 8441) — `WsOverH2Stream` + `bootstrap_ws_over_h2`; CONNECT + `:protocol=websocket` over a single h2 stream, frame masking preserved | [`ws_over_h2.mojo`](../examples/advanced/ws_over_h2.mojo), `flare.ws.client_h2` |
-| `permessage-deflate` (RFC 7692) — `PermessageDeflateConfig`, `compress_message` / `decompress_message`, `Sec-WebSocket-Extensions` parser + emitter, `negotiate_permessage_deflate`; invariant: `no_context_takeover` on both sides + 16 MiB per-message decompressed cap | [`ws_permessage_deflate.mojo`](../examples/advanced/ws_permessage_deflate.mojo), `flare.ws.permessage_deflate` |
+| `permessage-deflate` (RFC 7692) — `PermessageDeflateConfig`, `compress_message` / `decompress_message`, `Sec-WebSocket-Extensions` parser + emitter, `negotiate_permessage_deflate`; default invariant: `no_context_takeover` on both sides + 16 MiB per-message decompressed cap | [`ws_permessage_deflate.mojo`](../examples/advanced/ws_permessage_deflate.mojo), `flare.ws.permessage_deflate` |
+| `permessage-deflate` context-takeover (RFC 7692 §7.1 default mode) — `PermessageDeflateContext`: persistent compressor + decompressor pair, LZ77 sliding window carries between messages, fuzz-covered lifecycle (`fuzz-pmd-context` × 3 targets, 350K runs) | `flare.ws.permessage_deflate.PermessageDeflateContext` |
+| `WsClient.connect_prefer_h2(url, tls_config)` — ALPN-aware factory: advertises `["h2", "http/1.1"]`; if peer selects `http/1.1` (or none), delegates to the existing H1 Upgrade handshake; if peer selects `h2`, raises pointing at the (in-flight) full H2-tunnel runtime | [`tests/ws/test_ws_prefer_h2.mojo`](../tests/ws/test_ws_prefer_h2.mojo), `flare.ws.client` |
 
 ## TLS
 
@@ -340,6 +342,7 @@ Tests under [`tests/`](../tests/) mirror the package layout:
 | Examples (each part of `pixi run tests`) | 40+ under [`examples/`](../examples/) |
 | Fuzz harnesses | 34 under [`fuzz/`](../fuzz/), 8M+ runs combined, zero known crashes |
 | Sanitizer harnesses | `tests-asan` / `tests-tsan` / `tests-asserts-all` (see [`build.md`](build.md)) |
+| Conformance corpora | RFC 7230 HTTP/1 wire shapes under [`conformance/h1/`](../conformance/h1/) (runner: `test-conformance-h1`); RFC 6455 WebSocket frames under [`conformance/ws/`](../conformance/ws/) (runner: `test-conformance-ws`, 13 fixtures; Autobahn-anchored case ids 1.x / 2.x / 3.x / 5.x / 7.x) |
 
 Per-harness breakdown (input → fuzzer):
 
@@ -373,6 +376,7 @@ Per-harness breakdown (input → fuzzer):
 | RFC 8441 Extended CONNECT | `fuzz-extended-connect` |
 | HTTP/2 preface peek | `fuzz-h2-preface-peek` |
 | WebSocket `permessage-deflate` | `fuzz-ws-deflate` |
+| WebSocket `permessage-deflate` context-takeover (persistent z_stream lifecycle) | `fuzz-pmd-context` |
 | HAProxy PROXY v1 + v2 | `fuzz-proxy-protocol` |
 | io_uring SQE / CQE codec | `fuzz-io-uring-sqe` |
 | io_uring reactor cancel-surface | `fuzz-uring-reactor` |

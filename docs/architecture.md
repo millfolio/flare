@@ -15,12 +15,21 @@ flare.ws       WebSocket client + server (RFC 6455). Multi-worker
                :protocol=websocket): server-side capture in
                flare.http2 + WsOverH2Stream client-side
                adapter that bridges DATA frames to/from
-               WsFrame. RFC 7692 permessage-deflate codec
-               (no_context_takeover by default, per-message
-               cap to bound zip-bomb risk).
+               WsFrame. RFC 7692 permessage-deflate codec --
+               no_context_takeover via free functions
+               (compress_message / decompress_message), plus
+               context-takeover via PermessageDeflateContext
+               (persistent z_stream pair carrying the LZ77
+               window between messages; per-message cap on
+               both paths to bound zip-bomb risk). ALPN-aware
+               WsClient.connect_prefer_h2 factory dispatches
+               on the negotiated protocol -- h1 via the
+               existing Upgrade handshake, h2 routed to the
+               in-flight H2-tunnel runtime.
 flare.http2    Low-level HTTP/2 byte drivers (RFC 9113 +
                RFC 7541): Frame codec, HPACK enc/dec (incl.
-               H=1 Huffman literals + SIMD-shim decoder),
+               H=1 Huffman literals + a 256-entry table-driven
+               fast decoder for short codes, 3-4x scalar),
                stream + connection state machines,
                H2Connection (server byte driver),
                Http2ClientConnection (client byte driver,
@@ -32,15 +41,36 @@ flare.http2    Low-level HTTP/2 byte drivers (RFC 9113 +
 flare.http     HTTP/1.1 client + reactor server + Handler / Router / App
                + extractors (incl. Form / Multipart / Cookies)
                + ComptimeRouter + StaticResponse + Cancel / CancelHandler
-               + middleware stack (Logger / RequestId / Compress / CatchPanic)
+               + middleware stack (Logger / RequestId / Compress
+               / CatchPanic / Retry / Timeout)
                + Cors + FileServer (with HEAD + Range)
                + content-encoding (gzip + brotli)
                + signed cookies + typed Session[T] stores
                + HTTP/1.1 trailers (parse + emit) + multi-listener
                HttpServer.bind_many + HttpClient.with_pool
                connection pool + h2c-via-Upgrade client.
-               Router is Copyable (refcounted struct-handler list)
-               and resolves the multi-worker overload directly.
+               Sans-I/O parser sublayer under flare.http.proto.*
+               with H1LeniencyConfig knobs; conformance corpora
+               under conformance/h1/ + conformance/ws/.
+               Template engine with single-level inheritance via
+               {% block %} + {% extends %}. RFC 9111 cache
+               middleware (Cache[Inner, S] + InMemoryCacheStore +
+               FilesystemCacheStore). Router is Copyable
+               (refcounted struct-handler list) and resolves the
+               multi-worker overload directly.
+flare.grpc     gRPC layer on the flare.http2 reactor: framing
+               + Status + Metadata, unary + 3 streaming shapes
+               (server + client), per-stream Cancel + grpc-
+               timeout, proto3 codegen, grpc-go interop subset.
+flare.openapi  Comptime spec generator from ComptimeRouter +
+               JSON Schema 2020-12 + serve_openapi + Swagger
+               UI mount.
+flare.quic     Sans-I/O QUIC v1 codec primitives (no reactor /
+               TLS FFI / congestion control -- those land in
+               v0.9 alongside the QUIC server).
+flare.h3       Sans-I/O HTTP/3 frame codec (codec only; full
+               server lives with the QUIC reactor in v0.9).
+flare.qpack    Sans-I/O QPACK encoder + decoder.
 flare.crypto   HMAC-SHA256, base64url codec
 flare.tls      TLS 1.2/1.3 (OpenSSL); TlsAcceptor + ALPN +
                session resumption (RFC 5077 tickets / RFC 8446
@@ -57,7 +87,10 @@ flare.runtime  Reactor (kqueue/epoll + EPOLLEXCLUSIVE), TimerWheel,
 flare.testing  fork-and-serve helpers (`fork_server` /
                `kill_forked_server`) for cookbook examples and
                integration tests that need a real bound port
-               in a child process.
+               in a child process; plus TestClient[H] -- a
+               FastAPI-shaped in-process handler tester that
+               drives Handler.serve directly without binding
+               a port, for fast unit tests.
 flare.utils    POSIX FFI thunks (`fork` / `waitpid` / `kill` /
                `usleep` / `exit` / `getpid` + SIGKILL / SIGTERM /
                SIGINT) the Mojo stdlib doesn't expose yet.

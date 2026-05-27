@@ -60,6 +60,8 @@ basics.
 | [`infallible_handler.mojo`](../examples/intermediate/infallible_handler.mojo) | `HandlerInfallible` + `WithRaises` adapter for provably no-`raises` paths |
 | [`trailers.mojo`](../examples/intermediate/trailers.mojo) | HTTP/1.1 trailer fields (gRPC-style status trailer): `Response.trailers`, `Trailer:` header, smuggling guard |
 | [`multi_listener.mojo`](../examples/intermediate/multi_listener.mojo) | `HttpServer.bind_many` over multiple distinct addresses, single accept loop |
+| [`reliability.mojo`](../examples/intermediate/reliability.mojo) | `Retry[Inner]` + `TimeoutMiddleware[Inner]` + `RetryPolicy` -- idempotent-method gate, exponential backoff, sanitised 504 |
+| [`template_inheritance.mojo`](../examples/intermediate/template_inheritance.mojo) | Single-level template inheritance: parent layout + child overrides via `{% block %}` / `{% extends %}` / `Template.render_extending` |
 
 ## Advanced — comptime, low-level reactor, HTTP/2, mTLS, work-stealing
 
@@ -134,6 +136,7 @@ natural.
 | Compress WebSocket payloads with `permessage-deflate` | [`ws_permessage_deflate.mojo`](../examples/advanced/ws_permessage_deflate.mojo) |
 | Stand up a production-shaped server (RequestId + structured logs + graceful shutdown + healthz) | [`production_setup.mojo`](../examples/advanced/production_setup.mojo) |
 | Reuse markup via template inheritance (`{% block %}` / `{% extends %}`) | [`template_inheritance.mojo`](../examples/intermediate/template_inheritance.mojo) |
+| Retry idempotent requests + bound handler latency | [`reliability.mojo`](../examples/intermediate/reliability.mojo) |
 
 ## Reading data from a `Request`
 
