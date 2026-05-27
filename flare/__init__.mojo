@@ -816,6 +816,38 @@ from .h3 import (
     encode_h3_settings,
 )
 
+# flare.grpc — gRPC primitives on top of the HTTP/2 reactor.
+# This release ships the LPM framing + Status carrier; the call-
+# shape adapters (unary / server-streaming / client-streaming /
+# bidi) build on top of these in a later module within the cycle.
+from .grpc import (
+    GRPC_COMPRESSION_NONE,
+    GRPC_COMPRESSION_COMPRESSED,
+    GrpcCompressionFlag,
+    GrpcMessage,
+    GrpcDecodeResult,
+    decode_grpc_message,
+    encode_grpc_message,
+    GRPC_STATUS_OK,
+    GRPC_STATUS_CANCELLED,
+    GRPC_STATUS_UNKNOWN,
+    GRPC_STATUS_INVALID_ARGUMENT,
+    GRPC_STATUS_DEADLINE_EXCEEDED,
+    GRPC_STATUS_NOT_FOUND,
+    GRPC_STATUS_ALREADY_EXISTS,
+    GRPC_STATUS_PERMISSION_DENIED,
+    GRPC_STATUS_RESOURCE_EXHAUSTED,
+    GRPC_STATUS_FAILED_PRECONDITION,
+    GRPC_STATUS_ABORTED,
+    GRPC_STATUS_OUT_OF_RANGE,
+    GRPC_STATUS_UNIMPLEMENTED,
+    GRPC_STATUS_INTERNAL,
+    GRPC_STATUS_UNAVAILABLE,
+    GRPC_STATUS_DATA_LOSS,
+    GRPC_STATUS_UNAUTHENTICATED,
+    GrpcStatus,
+)
+
 # flare.ws
 from .ws.client import WsClient, WsHandshakeError, WsMessage
 from .ws.server import WsServer
