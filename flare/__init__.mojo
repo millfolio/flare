@@ -794,6 +794,28 @@ from .quic import (
     parse_short_header as quic_parse_short_header,
 )
 
+# flare.h3 — sans-I/O HTTP/3 codec primitives (RFC 9114).
+from .h3 import (
+    H3FrameType,
+    H3_FRAME_TYPE_DATA,
+    H3_FRAME_TYPE_HEADERS,
+    H3_FRAME_TYPE_CANCEL_PUSH,
+    H3_FRAME_TYPE_SETTINGS,
+    H3_FRAME_TYPE_PUSH_PROMISE,
+    H3_FRAME_TYPE_GOAWAY,
+    H3_FRAME_TYPE_MAX_PUSH_ID,
+    H3_SETTINGS_QPACK_MAX_TABLE_CAPACITY,
+    H3_SETTINGS_MAX_FIELD_SECTION_SIZE,
+    H3_SETTINGS_QPACK_BLOCKED_STREAMS,
+    H3_SETTINGS_ENABLE_CONNECT_PROTOCOL,
+    H3Frame,
+    H3Setting,
+    decode_h3_frame,
+    encode_h3_frame,
+    decode_h3_settings,
+    encode_h3_settings,
+)
+
 # flare.ws
 from .ws.client import WsClient, WsHandshakeError, WsMessage
 from .ws.server import WsServer
