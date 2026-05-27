@@ -40,6 +40,10 @@ from .framing import (
     decode_grpc_message,
     encode_grpc_message,
 )
+from .metadata import (
+    GrpcMetadata,
+    GrpcMetadataEntry,
+)
 from .status import (
     GRPC_STATUS_OK,
     GRPC_STATUS_CANCELLED,

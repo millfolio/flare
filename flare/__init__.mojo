@@ -828,6 +828,8 @@ from .grpc import (
     GrpcDecodeResult,
     decode_grpc_message,
     encode_grpc_message,
+    GrpcMetadata,
+    GrpcMetadataEntry,
     GRPC_STATUS_OK,
     GRPC_STATUS_CANCELLED,
     GRPC_STATUS_UNKNOWN,
