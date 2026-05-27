@@ -167,3 +167,8 @@ from flare.http2.state import (
     Stream as H2Stream,
     StreamState as H2StreamState,
 )
+
+# HTTP/1.1 parser leniency configuration carrier. Strict by
+# default; every relaxation is opt-in and named after the RFC
+# 9112 section it relaxes.
+from flare.http.proto.h1_leniency import H1LeniencyConfig
