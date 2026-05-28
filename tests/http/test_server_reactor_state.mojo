@@ -499,6 +499,45 @@ def test_step_result_defaults() raises:
     assert_equal(sr.idle_timeout_ms, -1)
 
 
+def test_response_includes_date_header_from_cache() raises:
+    """The serialised response carries an IMF-fixdate ``Date:`` line.
+
+    Closes critique register §C2 (DateCache existed but was never
+    plumbed into the response writer): every response now emits
+    ``Date: <wkday>, <DD> <Mon> <YYYY> HH:MM:SS GMT`` from the
+    per-connection :class:`DateCache`. The test asserts on the
+    fixed-width header shape (29 wire bytes after ``Date: ``,
+    trailing ``GMT``) rather than the exact wall-clock value so
+    it stays stable across builds.
+    """
+    var r = Reactor()
+    var listener = TcpListener.bind(SocketAddr.localhost(0))
+    var port = listener.local_addr().port
+    var client = TcpStream.connect(SocketAddr.localhost(port))
+    var server = listener.accept()
+    server._socket.set_nonblocking(True)
+    listener.close()
+    var ch = ConnHandle(server^)
+    var req = _bytes_of("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    _ = client.write(Span[UInt8](req))
+    var cfg = _default_config()
+    _ = _drive_readable(ch, r, _echo_handler, cfg)
+    _ = ch.on_writable(cfg)
+
+    var rbuf = List[UInt8]()
+    rbuf.resize(2048, 0)
+    var n = client.read(rbuf.unsafe_ptr(), 2048)
+    assert_true(n > 0)
+    var wire = String(unsafe_from_utf8=Span[UInt8](rbuf)[:n])
+    var date_pos = wire.find("\r\nDate: ")
+    assert_true(date_pos >= 0)
+    # IMF-fixdate is exactly 29 bytes; the line ends ``GMT\r\n``.
+    var gmt_pos = wire.find(" GMT\r\n", date_pos)
+    assert_true(gmt_pos >= 0)
+    assert_equal(gmt_pos - (date_pos + len("\r\nDate: ")), 25)
+    client.close()
+
+
 def main() raises:
     print("=" * 60)
     print("test_server_reactor_state.mojo — Phase 1.4 state machine")

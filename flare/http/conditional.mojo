@@ -67,6 +67,7 @@ var app = Conditional[Router](Router())  # wraps any Handler-shaped Inner
 from .handler import Handler
 from .request import Request
 from .response import Response
+from ..runtime.date_cache import civil_to_unix_seconds
 
 
 # ── ETag matcher ────────────────────────────────────────────────────────────
@@ -243,28 +244,7 @@ def _httpdate_to_unix(s: String) -> Int:
     if day < 0 or mon < 0 or year < 0 or hh < 0 or mm < 0 or ss < 0:
         return -1
 
-    return _civil_to_unix_seconds(year, mon + 1, day, hh, mm, ss)
-
-
-def _civil_to_unix_seconds(
-    y: Int, m: Int, d: Int, hh: Int, mm: Int, ss: Int
-) -> Int:
-    """Convert civil (Gregorian) date+time → Unix timestamp.
-
-    Algorithm: Howard Hinnant's days_from_civil
-    (https://howardhinnant.github.io/date_algorithms.html#days_from_civil),
-    which is branch-free and exact across the proleptic Gregorian
-    calendar. The intermediate cast of m - 3 → year-shifted month
-    folds February's leap-day handling into the year arithmetic.
-    """
-    var year = y - (1 if m <= 2 else 0)
-    var era = (year if year >= 0 else year - 399) // 400
-    var yoe = year - era * 400  # [0, 399]
-    var month_shifted = m + (9 if m <= 2 else -3)  # [0, 11]
-    var doy = (153 * month_shifted + 2) // 5 + d - 1  # [0, 365]
-    var doe = yoe * 365 + yoe // 4 - yoe // 100 + doy  # [0, 146096]
-    var days_since_epoch = era * 146097 + doe - 719468
-    return days_since_epoch * 86400 + hh * 3600 + mm * 60 + ss
+    return civil_to_unix_seconds(year, mon + 1, day, hh, mm, ss)
 
 
 # ── FNV-1a body hash for auto-ETag ──────────────────────────────────────────

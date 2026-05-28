@@ -84,6 +84,7 @@ from flare.runtime import (
     INTEREST_READ,
     INTEREST_WRITE,
     Pool,
+    DateCache,
 )
 from flare.runtime.uring_reactor import (
     UringReactor,
@@ -257,6 +258,17 @@ struct ConnHandle(Movable):
     header (a SETTINGS frame body per RFC 7540 §3.2.1). Applied
     to the new HTTP/2 connection state during migration."""
 
+    var _date_cache: DateCache
+    """Per-connection cached ``Date:`` header (RFC 9110 §6.6.1).
+
+    Closes critique register §C2 (DateCache existed but was never
+    plumbed into the response writer): we now emit ``Date:`` on
+    every response and amortise the formatting cost via the
+    cache's once-per-second rule. The ``clock_gettime`` call on
+    Linux x86_64 is vDSO-fast (no syscall), and the 29-byte
+    formatter only runs when the wall-clock second has rolled
+    over since the previous response on this connection."""
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def __init__(
@@ -292,6 +304,7 @@ struct ConnHandle(Movable):
         self._h2c_upgrade_pending = False
         self._h2c_upgrade_request = Optional[Request]()
         self._h2c_upgrade_settings = List[UInt8]()
+        self._date_cache = DateCache()
 
     @always_inline
     def fd(self) -> c_int:
@@ -1291,10 +1304,13 @@ struct ConnHandle(Movable):
 
         for i in range(resp.headers.len()):
             var k = resp.headers._keys[i]
-            # Case-insensitive skip of Content-Length and Connection
-            # without allocating a lowercased copy each header. Compare
-            # only the length-matching candidates.
-            if _is_content_length(k) or _is_connection(k):
+            # Case-insensitive skip of Content-Length, Connection,
+            # and Date without allocating a lowercased copy each
+            # header. Compare only the length-matching candidates.
+            # Date is always emitted by us from the per-connection
+            # DateCache; any caller-supplied Date is dropped (RFC
+            # 9110 §6.6.1: single Date field-line per response).
+            if _is_content_length(k) or _is_connection(k) or _is_date(k):
                 continue
             _append_str(wire, k)
             _append_str(wire, ": ")
@@ -1303,6 +1319,22 @@ struct ConnHandle(Movable):
 
         _append_str(wire, "Content-Length: ")
         _append_int(wire, body_len)
+        _append_str(wire, "\r\n")
+
+        # Date: RFC 9110 §6.6.1, IMF-fixdate from the per-connection
+        # DateCache. The cache calls clock_gettime + (re)formats only
+        # when the wall-clock second has advanced; reads on the same
+        # second return the cached 29-byte buffer directly.
+        self._date_cache.refresh()
+        var date_bytes = self._date_cache.current_bytes()
+        _append_str(wire, "Date: ")
+        var date_old_len = len(wire)
+        wire.resize(date_old_len + len(date_bytes), UInt8(0))
+        memcpy(
+            dest=wire.unsafe_ptr() + date_old_len,
+            src=date_bytes.unsafe_ptr(),
+            count=len(date_bytes),
+        )
         _append_str(wire, "\r\n")
 
         if keep_alive:
@@ -1367,6 +1399,31 @@ def _is_content_length(k: String) -> Bool:
     var target = "content-length"
     var t = target.unsafe_ptr()
     for i in range(14):
+        var c = p[i]
+        if c >= 65 and c <= 90:
+            c = c + 32
+        if c != t[i]:
+            return False
+    return True
+
+
+@always_inline
+def _is_date(k: String) -> Bool:
+    """Return True if ``k`` is ``Date`` (ASCII case-insensitive).
+
+    Hot path: called for every response header during serialise so
+    that any caller-supplied ``Date`` is dropped in favour of the
+    canonical IMF-fixdate emitted from the per-connection
+    :class:`DateCache`. RFC 9110 §6.6.1 mandates a single ``Date``
+    field-line; the cached form is always correct, the
+    caller-supplied one might drift.
+    """
+    if k.byte_length() != 4:
+        return False
+    var p = k.unsafe_ptr()
+    var target = "date"
+    var t = target.unsafe_ptr()
+    for i in range(4):
         var c = p[i]
         if c >= 65 and c <= 90:
             c = c + 32

@@ -56,6 +56,124 @@ comptime _IMF_FIXDATE_LEN: Int = 29
 comptime _SECS_PER_DAY: Int = 86400
 
 
+# ── Public civil-date math (single source of truth) ──────────────────────────
+#
+# Closes critique register §C2: three modules carried their own
+# Howard Hinnant civil-from-days / days-from-civil identities --
+# the inverse for IMF-fixdate (here), the forward for HTTP-date
+# parsing (``flare.http.conditional._civil_to_unix_seconds``),
+# and the inverse for ISO-8601 logging
+# (``flare.http.structured_logger._format_iso8601_utc``). They
+# now route through the two helpers below. The arithmetic is the
+# branch-free identity from
+# https://howardhinnant.github.io/date_algorithms.html and is
+# exact across the proleptic Gregorian calendar.
+def civil_to_unix_seconds(
+    y: Int, m: Int, d: Int, hh: Int, mm: Int, ss: Int
+) -> Int:
+    """Return Unix epoch seconds for ``(y, m, d, hh, mm, ss)`` UTC.
+
+    Howard Hinnant's ``days_from_civil`` (forward) identity. The
+    intermediate cast of ``m - 3`` into a year-shifted month
+    folds February's leap-day handling into the year arithmetic.
+
+    Args:
+        y: Civil year (e.g. ``2026``).
+        m: Civil month, 1..12.
+        d: Civil day-of-month, 1..31.
+        hh: Hour-of-day, 0..23.
+        mm: Minute-of-hour, 0..59.
+        ss: Second-of-minute, 0..59.
+
+    Returns:
+        Unix-epoch seconds (signed; negative for dates before
+        1970-01-01).
+    """
+    var year = y - (1 if m <= 2 else 0)
+    var era = (year if year >= 0 else year - 399) // 400
+    var yoe = year - era * 400  # [0, 399]
+    var month_shifted = m + (9 if m <= 2 else -3)  # [0, 11]
+    var doy = (153 * month_shifted + 2) // 5 + d - 1  # [0, 365]
+    var doe = yoe * 365 + yoe // 4 - yoe // 100 + doy  # [0, 146096]
+    var days_since_epoch = era * 146097 + doe - 719468
+    return days_since_epoch * _SECS_PER_DAY + hh * 3600 + mm * 60 + ss
+
+
+@fieldwise_init
+struct CivilTime(Copyable, Movable):
+    """Civil (Gregorian) date-time + day-of-week derived from a
+    Unix epoch second.
+
+    Fields:
+        year: Civil year (e.g. ``2026``).
+        month: Civil month, 1..12.
+        day: Civil day-of-month, 1..31.
+        hour: Hour-of-day, 0..23.
+        minute: Minute-of-hour, 0..59.
+        second: Second-of-minute, 0..59.
+        day_of_week: 0=Sun, 1=Mon, ..., 6=Sat.
+
+    The ``day_of_week`` is derived directly from Unix days
+    (epoch was a Thursday → ``+4`` offset before mod-7); callers
+    that don't need it can ignore the field.
+    """
+
+    var year: Int
+    var month: Int
+    var day: Int
+    var hour: Int
+    var minute: Int
+    var second: Int
+    var day_of_week: Int
+
+
+def unix_seconds_to_civil(unix_secs: Int) -> CivilTime:
+    """Decompose a Unix epoch second into a :class:`CivilTime`.
+
+    Howard Hinnant's ``civil_from_days`` (inverse) identity,
+    branch-free over the proleptic Gregorian calendar.
+
+    Args:
+        unix_secs: Unix-epoch seconds (signed; negative is fine).
+
+    Returns:
+        :class:`CivilTime` with the year/month/day/hour/minute/
+        second/day_of_week decomposition.
+    """
+    var days = unix_secs // _SECS_PER_DAY
+    var sod = unix_secs - days * _SECS_PER_DAY  # second-of-day
+    var hh = sod // 3600
+    var mm = (sod % 3600) // 60
+    var ss = sod % 60
+
+    # Day-of-week. Unix epoch (1970-01-01) was a Thursday → dow_offset=4.
+    var dow_raw = (days + 4) % 7
+    if dow_raw < 0:
+        dow_raw += 7
+
+    days = days + 719468
+    var era = (days if days >= 0 else days - 146096) // 146097
+    var doe = days - era * 146097  # [0, 146096]
+    var yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    var y = yoe + era * 400
+    var doy = doe - (365 * yoe + yoe // 4 - yoe // 100)  # [0, 365]
+    var mp = (5 * doy + 2) // 153  # [0, 11]
+    var d = doy - (153 * mp + 2) // 5 + 1  # [1, 31]
+    var m = mp + 3 if mp < 10 else mp - 9  # [1, 12]
+    if m <= 2:
+        y += 1
+
+    return CivilTime(
+        year=y,
+        month=m,
+        day=d,
+        hour=hh,
+        minute=mm,
+        second=ss,
+        day_of_week=dow_raw,
+    )
+
+
 # ── Lookup tables ─────────────────────────────────────────────────────────────
 
 
@@ -254,59 +372,39 @@ def _format_imf_fixdate(
         0123456789012345678901234567 8
         0         1         2
 
-    Branch-free civil-from-days arithmetic via Howard Hinnant's
-    inverse, identical to the routine used in
-    ``flare.http.structured_logger`` for ISO-8601 timestamps.
+    Branch-free civil-from-days arithmetic via the canonical
+    :func:`unix_seconds_to_civil` helper (Howard Hinnant's
+    inverse identity), shared with
+    :mod:`flare.http.structured_logger` and
+    :mod:`flare.http.conditional`.
     """
-    var days = unix_secs // _SECS_PER_DAY
-    var sod = unix_secs - days * _SECS_PER_DAY  # second-of-day
-    var hh = sod // 3600
-    var mm = (sod % 3600) // 60
-    var ss = sod % 60
-
-    # Day-of-week. Unix epoch (1970-01-01) was a Thursday → dow_offset=4.
-    var dow_raw = (days + 4) % 7
-    if dow_raw < 0:
-        dow_raw += 7
-
-    # Howard Hinnant civil_from_days inverse:
-    days = days + 719468
-    var era = (days if days >= 0 else days - 146096) // 146097
-    var doe = days - era * 146097  # [0, 146096]
-    var yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
-    var y = yoe + era * 400
-    var doy = doe - (365 * yoe + yoe // 4 - yoe // 100)  # [0, 365]
-    var mp = (5 * doy + 2) // 153  # [0, 11]
-    var d = doy - (153 * mp + 2) // 5 + 1  # [1, 31]
-    var m = mp + 3 if mp < 10 else mp - 9  # [1, 12]
-    if m <= 2:
-        y += 1
+    var ct = unix_seconds_to_civil(unix_secs)
 
     # "Day, " (4-byte day-of-week + comma at offset 3, then a space at 4).
-    var dow_simd = _day_of_week_short(dow_raw)
+    var dow_simd = _day_of_week_short(ct.day_of_week)
     (p + 0).init_pointee_copy(dow_simd[0])
     (p + 1).init_pointee_copy(dow_simd[1])
     (p + 2).init_pointee_copy(dow_simd[2])
     (p + 3).init_pointee_copy(dow_simd[3])
     (p + 4).init_pointee_copy(UInt8(32))  # space
 
-    _write_two_digits(p, 5, d)
+    _write_two_digits(p, 5, ct.day)
     (p + 7).init_pointee_copy(UInt8(32))  # space
 
-    var mon_simd = _month_short(m)
+    var mon_simd = _month_short(ct.month)
     (p + 8).init_pointee_copy(mon_simd[0])
     (p + 9).init_pointee_copy(mon_simd[1])
     (p + 10).init_pointee_copy(mon_simd[2])
     (p + 11).init_pointee_copy(mon_simd[3])  # trailing space
 
-    _write_four_digits(p, 12, y)
+    _write_four_digits(p, 12, ct.year)
     (p + 16).init_pointee_copy(UInt8(32))
 
-    _write_two_digits(p, 17, hh)
+    _write_two_digits(p, 17, ct.hour)
     (p + 19).init_pointee_copy(UInt8(58))  # ':'
-    _write_two_digits(p, 20, mm)
+    _write_two_digits(p, 20, ct.minute)
     (p + 22).init_pointee_copy(UInt8(58))
-    _write_two_digits(p, 23, ss)
+    _write_two_digits(p, 23, ct.second)
     (p + 25).init_pointee_copy(UInt8(32))
     (p + 26).init_pointee_copy(UInt8(71))  # 'G'
     (p + 27).init_pointee_copy(UInt8(77))  # 'M'

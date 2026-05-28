@@ -62,6 +62,7 @@ from std.time import perf_counter_ns
 from .handler import Handler
 from .request import Request
 from .response import Response
+from ..runtime.date_cache import unix_seconds_to_civil
 
 
 # ── JSON escaper ────────────────────────────────────────────────────────────
@@ -109,51 +110,34 @@ def _json_escape(s: String) -> String:
 # ── Timestamp formatter ─────────────────────────────────────────────────────
 
 
-comptime _SECS_PER_DAY: Int = 86400
-
-
 def _format_iso8601_utc(unix_ns: Int) -> String:
     """Format ``unix_ns`` (Unix epoch nanoseconds) as
     ``YYYY-MM-DDTHH:MM:SS.mmmZ`` UTC.
 
-    Branch-free civil-from-days arithmetic via Howard Hinnant's
-    days-from-civil inverse, so we don't need ``gmtime_r`` / TZ
-    environment fiddling.
+    Branch-free civil-from-days arithmetic via the canonical
+    :func:`flare.runtime.date_cache.unix_seconds_to_civil`
+    helper, so we don't need ``gmtime_r`` / TZ environment
+    fiddling and the same identity is shared with the
+    IMF-fixdate writer in :mod:`flare.runtime.date_cache` and
+    the HTTP-date parser in :mod:`flare.http.conditional`.
     """
     var unix_ms_total = unix_ns // 1_000_000
     var ms_in_sec = Int(unix_ms_total % 1000)
     var unix_secs = Int(unix_ms_total // 1000)
-    var days = unix_secs // _SECS_PER_DAY
-    var sod = unix_secs - days * _SECS_PER_DAY  # second-of-day
-    var hh = sod // 3600
-    var mm = (sod % 3600) // 60
-    var ss = sod % 60
-
-    # Howard Hinnant civil_from_days inverse:
-    days = days + 719468
-    var era = (days if days >= 0 else days - 146096) // 146097
-    var doe = days - era * 146097  # [0, 146096]
-    var yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
-    var y = yoe + era * 400
-    var doy = doe - (365 * yoe + yoe // 4 - yoe // 100)  # [0, 365]
-    var mp = (5 * doy + 2) // 153  # [0, 11]
-    var d = doy - (153 * mp + 2) // 5 + 1  # [1, 31]
-    var m = mp + 3 if mp < 10 else mp - 9  # [1, 12]
-    if m <= 2:
-        y += 1
+    var ct = unix_seconds_to_civil(unix_secs)
 
     var out = String(capacity=24)
-    out += _pad(y, 4)
+    out += _pad(ct.year, 4)
     out += "-"
-    out += _pad(m, 2)
+    out += _pad(ct.month, 2)
     out += "-"
-    out += _pad(d, 2)
+    out += _pad(ct.day, 2)
     out += "T"
-    out += _pad(hh, 2)
+    out += _pad(ct.hour, 2)
     out += ":"
-    out += _pad(mm, 2)
+    out += _pad(ct.minute, 2)
     out += ":"
-    out += _pad(ss, 2)
+    out += _pad(ct.second, 2)
     out += "."
     out += _pad(ms_in_sec, 3)
     out += "Z"
