@@ -49,7 +49,7 @@ while True:
     s.close()
 ```
 
-Out of scope for the v0.7 ship:
+Out of scope today:
 
 - Abstract namespace addresses (Linux-only ``\0``-prefixed path);
   follow-up if a downstream sidecar request comes in.

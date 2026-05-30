@@ -4,8 +4,8 @@ Two compiled templates, one parent + one child, rendered through
 ``Template.render_extending`` so the child's blocks slot into the
 parent's surrounding HTML.
 
-Pure construction -- no live network. Demonstrates the v0.8 Track J
-addition to ``flare.http.template``.
+Pure construction -- no live network. Demonstrates single-level
+template inheritance in :mod:`flare.http.template`.
 
 Run:
     pixi run example-template-inheritance

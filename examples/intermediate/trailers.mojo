@@ -1,4 +1,4 @@
-"""HTTP/1.1 trailer fields -- gRPC-shaped status trailer demo (v0.7).
+"""HTTP/1.1 trailer fields -- gRPC-shaped status trailer demo.
 
 Trailer fields ride after the zero-length chunk of a ``Transfer-
 Encoding: chunked`` response (RFC 7230 §4.1.2). They're the

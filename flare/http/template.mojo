@@ -852,7 +852,7 @@ struct Template(Copyable, Movable):
     O(M) in output length (one pass over the parsed tree, one
     HTML-escape pass per ``{{ var }}``).
 
-    Inheritance support (v0.8):
+    Inheritance support:
 
     - ``{% extends "<name>" %}`` as the *first* non-whitespace
       tag marks this template as a child of another. The parsed
@@ -870,7 +870,7 @@ struct Template(Copyable, Movable):
     Inheritance is single-level: the parent is not itself
     expected to extend a grandparent. Transitive extends adds
     code without buying enough use-case coverage to justify
-    the complexity in v0.8.
+    the complexity.
     """
 
     var nodes: List[TemplateNode]

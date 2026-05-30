@@ -1,6 +1,6 @@
 """Streaming response with a parametric body type.
 
-``Response`` is the -shape buffered response: ``body:
+``Response`` is the buffered response shape: ``body:
 List[UInt8]`` materialised before the first send. For
 unbounded / large / Server-Sent-Event style outputs that would
 defeat the buffer-then-send model, ``StreamingResponse[B: Body]``
@@ -11,16 +11,12 @@ is unknown.
 
 Why a sibling type rather than ``Response[B: Body]`` parametric:
 
-The plan's preferred shape was ``Response = Response[InlineBody]``
+The natural shape would be ``Response = Response[InlineBody]``
 type alias with the existing helpers (``ok``, ``not_found``,
-...) returning the alias.
-
-**v0.8 re-probe outcome:** the parametric alias *does* compile
-cleanly on the v0.8-pinned Mojo nightly (``ParametricResponse[InlineBody]``
-+ ``ParametricResponse[ChunkedBody[Source]]`` both parse and
-specialise without the alias-with-default-parameter issue v0.7
-ran into). The blocker is no longer compiler support; it is
-migration churn:
+...) returning the alias. The parametric alias *does* compile
+cleanly today (``ParametricResponse[InlineBody]`` +
+``ParametricResponse[ChunkedBody[Source]]`` both parse and
+specialise), but the blocker is migration churn:
 
 1. Making ``Response`` parametric requires changing every
    ``Response(status=..., body=List[UInt8](...))`` constructor
@@ -34,12 +30,11 @@ migration churn:
    would surface in error messages.
 3. The sibling type works today and is opt-in -- handlers that
    want streaming return ``StreamingResponse[ChunkedBody[Source]]``;
-   handlers that don't aren't affected.
+   handlers that do not are not affected.
 
-**Decision for v0.8:** keep the sibling type. The end-user shape
-is identical to the planned parametric ``Response[B]``; only
-the public name differs. The migration is queued for v0.9
-alongside the QUIC server work, where the response abstraction
+The end-user shape is identical to the planned parametric
+``Response[B]``; only the public name differs. The migration is
+queued for the QUIC server work, where the response abstraction
 will need to grow anyway (h3 frames vs h2 frames vs h1 wire
 chunks) and a single parametric type makes that grow honestly
 rather than via three sibling types.

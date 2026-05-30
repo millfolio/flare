@@ -1,11 +1,10 @@
-"""HttpServer.bind_many -- one process, multiple listening addresses (v0.7).
+"""HttpServer.bind_many -- one process, multiple listening addresses.
 
 The default :func:`HttpServer.bind` listens on a single
 ``SocketAddr``. Real deployments often want one process to accept
 on **multiple** addresses simultaneously: an internal admin port
 alongside the public service port; an IPv4 address paired with an
-IPv6 address; the public TCP socket plus a UNIX socket once the
-``UdsListener`` track lands.
+IPv6 address; the public TCP socket plus a UNIX socket.
 
 ``HttpServer.bind_many(addrs)`` opens one listener fd per address,
 hands all of them to a single-worker reactor, and accepts new
@@ -14,7 +13,7 @@ complementary to the multi-worker ``SO_REUSEPORT`` mode -- that
 shape is **N fds on the same address** (kernel hashes new
 4-tuples across workers); this one is **N fds on N distinct
 addresses, one worker**. The cross product (multi-worker x
-multi-listener) is on the v0.7.x roadmap; today picking one or
+multi-listener) is a future addition; today picking one or
 the other is the right design choice.
 
 What this example shows:

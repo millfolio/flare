@@ -107,11 +107,11 @@ Extractor traits + reflective adapter:
 | `Extractor` trait | Anything that pulls a value from a `Request` | `flare.http.extract` |
 | `Extracted[H]` | Reflects on a struct's fields, runs every extractor before `serve`; malformed input becomes a sanitised 400 | [`extractors.mojo`](../examples/intermediate/extractors.mojo) |
 
-The v0.7 parametric layer (`Path[T: ParamParser, name]` / `ParamInt`
-/ `ParamString` / ...) was removed in v0.8: it added a `.value.value`
-chain at every call site and never carried a custom `ParamParser`
-impl in practice. Custom types are now handled by writing your own
-`Extractor` struct directly.
+Custom types are handled by writing your own `Extractor` struct
+that pulls and validates the value from the request. The
+extractor surface is intentionally concrete — every type is
+named — so the IDE, the compiler, and the reader all see the
+same shape.
 
 ## Middleware
 
@@ -128,7 +128,7 @@ by nesting structs:
 | `Conditional[Inner]` | RFC 9110 §13 preconditions: `If-Match` / `If-None-Match` (304 / 412), `If-Modified-Since` / `If-Unmodified-Since`; opt-in auto-ETag from FNV-1a body hash via `Conditional.with_auto_etag` | `flare.http.conditional` |
 | `FileServer.new(root)` | Static file serving with GET / HEAD + RFC 9110 §14.4 single-Range, MIME inference, path safety (`..` / NUL / absolute path rejection), `index.html` directory fall-through | [`static_files.mojo`](../examples/intermediate/static_files.mojo) |
 | `Retry[Inner]` + `RetryPolicy` | Re-invoke the inner handler up to `max_attempts` times on 5xx; RFC 9110 §9.2.2 idempotent-method gate on by default (GET / HEAD / PUT / DELETE / OPTIONS retry; POST / PATCH pass through once unless `retry_only_idempotent` is `False`). Optional exponential backoff with jitter via `RetryPolicy(backoff_base_ms, backoff_max_ms, backoff_jitter_ms)` | [`reliability.mojo`](../examples/intermediate/reliability.mojo) |
-| `PostHocDeadline[Inner]` | **Post-hoc** wall-clock guard: invokes the inner handler synchronously, then if the elapsed time exceeds `budget_ms`, replaces the response with a sanitised 504. Does **not** cancel the inner handler mid-execution -- it only refuses the response that was produced too late. `budget_ms <= 0` is the explicit "disabled" sentinel that always trips 504. The real cancel-cell wiring lives in v0.9 | [`reliability.mojo`](../examples/intermediate/reliability.mojo) |
+| `PostHocDeadline[Inner]` | **Post-hoc** wall-clock guard: invokes the inner handler synchronously, then if the elapsed time exceeds `budget_ms`, replaces the response with a sanitised 504. Does **not** cancel the inner handler mid-execution -- it only refuses the response that was produced too late. `budget_ms <= 0` is the explicit "disabled" sentinel that always trips 504. The cancel-cell wiring that would let the deadline preempt the inner handler is a future addition. | [`reliability.mojo`](../examples/intermediate/reliability.mojo) |
 | `negotiate_encoding(Accept-Encoding) -> Encoding` | RFC 9110 §12.5.3 q-value parser exposed for direct use | `flare.http.middleware` |
 
 ## HTTP caching (RFC 9111)
@@ -241,8 +241,7 @@ and `fuzz-h3-frame` harnesses listed in the
 Sans-I/O gRPC codec primitives — wire-level surface only
 (LPM framing, canonical Status codes, Metadata carrier).
 The HTTP/2 server adapter that translates these into an
-end-to-end gRPC server ships in v0.9, per the design
-register.
+end-to-end gRPC server ships in a follow-up release.
 
 | Surface | Where |
 |---|---|

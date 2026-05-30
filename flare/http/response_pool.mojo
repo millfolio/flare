@@ -14,7 +14,7 @@ Each ``Response.__init__`` allocates:
 2. The body ``List[UInt8]`` (default-constructed; capacity 0).
 3. A fresh ``reason`` String + ``version`` String.
 
-Even with the v0.6 ownership refactor (``var body``, no copy),
+Even with ownership-by-move responses (``var body``, no copy),
 this is one struct + two lists per response. On a long-running
 keep-alive connection at 220K req/s, that's ~2.2M list
 allocations / s — measurable. ``ResponsePool.acquire()`` returns

@@ -122,7 +122,7 @@ comptime IORING_OP_TIMEOUT_REMOVE: Int = 12
 comptime IORING_OP_ACCEPT: Int = 13
 """5.5+. accept4(2) async — the listener-socket fast path."""
 comptime IORING_OP_ASYNC_CANCEL: Int = 14
-"""5.5+. Cancel an in-flight SQE by user_data; the v0.7
+"""5.5+. Cancel an in-flight SQE by user_data; the
 ``Cancel.SHUTDOWN`` plumbing on the io_uring backend uses this
 to interrupt long-running multishot recvs."""
 comptime IORING_OP_LINK_TIMEOUT: Int = 15

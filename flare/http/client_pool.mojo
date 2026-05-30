@@ -13,7 +13,7 @@ fd is closed. A first read on a freshly-acquired fd that returns
 0 (peer closed the keep-alive idly) signals stale, and the caller
 retries on a fresh connection (RFC 7230 §6.3.1).
 
-Scope -- v0.7 keeps it deliberately small:
+Scope -- the pool is deliberately kept small:
 
 * Plain TCP (``http://``) only. ``https://`` requests still
   full-handshake every time; the TLS resumption work in
@@ -30,7 +30,7 @@ Scope -- v0.7 keeps it deliberately small:
 * Synchronous, single-threaded -- the pool is owned by an
   ``HttpClient`` instance, and ``HttpClient`` is ``Movable`` (not
   ``Copyable``), so the pool is never shared across threads.
-  Multi-worker pooling is a v0.8 line item.
+  Multi-worker pooling is a future addition.
 
 The ``ClientPool`` struct itself is a thin handle holding the
 heap address of an internal ``_ClientPoolState`` (mirrors the
@@ -108,8 +108,8 @@ struct ClientPool(Copyable, Movable):
     Mojo's implicit copy on argument passing) MUST NOT call
     :meth:`free`.
 
-    The pool is a v0.7 building block; see the module docstring
-    for scope.
+    The pool is an HTTP/1.1 building block; see the module
+    docstring for scope.
     """
 
     var _addr: Int

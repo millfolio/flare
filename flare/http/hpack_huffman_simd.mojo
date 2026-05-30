@@ -20,10 +20,10 @@ Why this is the right shape today
 Mojo's stdlib does not yet expose a 1-byte shuffle intrinsic
 (PSHUFB on x86, TBL on ARM NEON) that would let us decode 4-bit
 nibbles in parallel the way ``hyper``'s and ``nghttp2``'s SIMD
-paths do. Falling back to the scalar bit-walker the v0.7 shim
-inherited means a linear scan over all 257 Huffman symbols for
-every output byte -- the gate "is SIMD actually faster" turns
-into "do we have a usable fast table at all". A table-driven
+paths do. Falling back to the scalar bit-walker that the
+earlier shim used means a linear scan over all 257 Huffman
+symbols for every output byte -- the gate "is SIMD actually
+faster" turns into "do we have a usable fast table at all". A table-driven
 fast path was always the bar both reference implementations cite
 as their non-SIMD floor (see ``hpack/src/huffman.rs`` in
 ``hyperium/hpack`` and ``lib/nghttp2_hd_huffman.c`` in

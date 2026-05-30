@@ -2,12 +2,11 @@
 
 This module bolts the WebSocket framing layer (`flare.ws.frame`) on
 top of a single HTTP/2 stream driven by
-`flare.http2.client.Http2ClientConnection`. It exists to satisfy
-the v0.7 deliverable that ships the *primitive* for WS-over-h2 --
-the high-level ALPN-driven `WsClient.prefer_h2 = True` dispatcher,
-the Extended CONNECT 200-response wait, and the
-nghttp2/browser-interop test suite are explicitly tracked as
-v0.7.x follow-up work in `docs/features.md`.
+`flare.http2.client.Http2ClientConnection`. It ships the *primitive*
+for WS-over-h2 -- the high-level ALPN-driven
+`WsClient.prefer_h2 = True` dispatcher, the Extended CONNECT
+200-response wait, and the nghttp2/browser-interop test suite are
+tracked as follow-up work in `docs/features.md`.
 
 Design constraints (RFC 8441 §5):
 
@@ -110,7 +109,7 @@ struct WsOverH2Stream(Movable):
     Owns the per-stream receive buffer (DATA frames are appended,
     WS frames are pulled out as they complete) and the outgoing
     masking-key state (a deterministic monotonic counter is fine
-    for v0.7 -- the over-the-wire mask is moot when h2 is itself
+    here -- the over-the-wire mask is moot when h2 is itself
     over TLS, but we still emit it so the adapter is symmetrical
     with the h1 path).
 
@@ -131,8 +130,9 @@ struct WsOverH2Stream(Movable):
     :attr:`Stream.data`. Refilled on every :meth:`pull_frames`."""
     var mask_counter: UInt32
     """Monotonic counter used to derive a 4-byte masking key per
-    outbound frame; sufficient for v0.7 (TLS already protects the
-    wire). v0.7.x will swap this for a CSPRNG-derived key."""
+    outbound frame; sufficient when TLS already protects the
+    wire. A future iteration will swap this for a CSPRNG-derived
+    key."""
     var closed: Bool
     """Set to ``True`` after a CLOSE frame is sent or received.
     Subsequent send/recv attempts raise."""

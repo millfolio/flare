@@ -59,7 +59,7 @@ comptime _H2_DEFAULT_INITIAL_WINDOW_SIZE: Int = 65535
 """RFC 9113 §6.5.2 mandates 65535 as the default for new streams
 until SETTINGS negotiates a different value. ``Http2Config`` ships
 the same number so the default ``Http2Config()`` is observably
-identical to the v0.6 ``H2Connection()`` shape."""
+identical to the legacy ``H2Connection()`` shape."""
 
 comptime _H2_DEFAULT_MAX_FRAME_SIZE: Int = 16384
 """RFC 9113 §6.5.2 mandates 16384 (2^14) as both the protocol
@@ -89,13 +89,13 @@ struct Http2Config(Copyable, Defaultable, Movable):
     on the inbound HEADERS path. The default H=0 encoder + raw-
     literal decoder is CRIME-class-side-channel-free by construction;
     the scalar Huffman decoder is wired through ``HpackDecoder``
-    when this flag is ``True``. Default ``False`` keeps the v0.6
-    wire format byte-identical for upgrading peers.
+    when this flag is ``True``. Default ``False`` keeps the
+    legacy wire format byte-identical for upgrading peers.
 
     The ``allow_huffman_encode`` flag mirrors the decoder side: when
     ``True`` the server's outbound HEADERS encoder picks the shorter
-    of raw vs Huffman per literal. Default ``False`` keeps the v0.6
-    H=0-only emit byte-identical.
+    of raw vs Huffman per literal. Default ``False`` keeps the
+    legacy H=0-only emit byte-identical.
 
     Example:
 
@@ -139,7 +139,7 @@ struct Http2Config(Copyable, Defaultable, Movable):
             picks the shorter of raw vs Huffman per emitted
             literal (size-only optimisation; H=1 frames remain
             CRIME-safe because the encoder dynamic table stays
-            empty). Defaults to ``False`` -- v0.6 H=0-only wire
+            empty). Defaults to ``False`` -- H=0-only wire
             output until peers and soak data confirm interop.
     """
 
@@ -164,7 +164,8 @@ struct Http2Config(Copyable, Defaultable, Movable):
         the design doc: 100 concurrent streams, 64 KiB-1 initial
         window, 16 KiB max frame, 8 KiB max header list, 4 KiB
         HPACK dynamic table, Huffman decode/encode both disabled
-        (v0.6 wire-compatible default), Extended CONNECT disabled.
+        (legacy wire-compatible default), Extended CONNECT
+        disabled.
         """
         self.max_concurrent_streams = _H2_DEFAULT_MAX_CONCURRENT_STREAMS
         self.initial_window_size = _H2_DEFAULT_INITIAL_WINDOW_SIZE
@@ -293,8 +294,8 @@ struct H2Connection(Defaultable, Movable):
         into ``conn.hpack_decoder.allow_huffman``; the
         ``allow_huffman_encode`` flag into
         ``conn.hpack_encoder.allow_huffman``. Both default to
-        ``False`` so the wire format stays byte-identical to v0.6
-        unless the user opts in.
+        ``False`` so the wire format stays byte-identical to the
+        legacy default unless the user opts in.
         """
         config.validate()
         var out = H2Connection()

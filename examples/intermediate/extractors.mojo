@@ -16,10 +16,8 @@ Since :
   ``r.get("/users/:id", Extracted[GetUser]())``.
 - The concrete ``PathInt`` / ``PathStr`` / ``PathFloat`` /
   ``PathBool`` / ``QueryInt`` / ``HeaderStr`` / ... extractors
-  expose ``.value`` as the primitive directly. The earlier
-  parametric ``Path[T: ParamParser, name]`` layer was removed in
-  v0.8 — custom types are handled by writing your own ``Extractor``
-  struct.
+  expose ``.value`` as the primitive directly. Custom types are
+  handled by writing your own ``Extractor`` struct.
 
 Run:
     pixi run example-extractors

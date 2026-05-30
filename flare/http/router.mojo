@@ -226,11 +226,11 @@ def _struct_destroy_thunk[H: Handler & Copyable & Movable](addr: Int) -> None:
 
 # ── Shared registry for boxed Handler-struct addresses ─────────
 #
-# v0.7 closes the deferred Router-Copyable item by routing the
-# shared-ownership state through ``ArcPointer``: the struct-handler
-# addresses + monomorphised serve / destroy thunks live inside a
-# single ``_StructHandlerRegistry`` value that every Router copy
-# shares via ``ArcPointer[_StructHandlerRegistry]``. The Arc bumps
+# Router shares the boxed Handler-struct addresses across copies
+# via ``ArcPointer``: the struct-handler addresses + monomorphised
+# serve / destroy thunks live inside a single
+# ``_StructHandlerRegistry`` value that every Router copy shares
+# through ``ArcPointer[_StructHandlerRegistry]``. The Arc bumps
 # the refcount on Router copy and, on the last drop, runs the
 # registry's destructor -- which walks the destroy thunks once and
 # frees every boxed Handler struct.

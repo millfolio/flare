@@ -24,7 +24,7 @@ Why land the API surface now (not after the reactor wiring):
 
 - Handler authors who want to write code that uses request
   chunking can do so today; their handlers will compile against
-  the v0.7 surface.
+  this surface unchanged when the reactor swaps in.
 - The cancellation discipline is already correct: every
   ``next(cancel)`` call polls ``cancel.cancelled()`` so a
   handler that loops over a large upload bails immediately on
@@ -35,7 +35,7 @@ Why land the API surface now (not after the reactor wiring):
 
 Configuration:
 
-- ``chunk_size`` defaults to 64 KiB — same chunk size the v0.6
+- ``chunk_size`` defaults to 64 KiB — same chunk size the
   ``HttpServer`` uses for outbound writes, picked to fill an
   L1 cache line × 1024 (typical x86-64) without crossing into
   page-fault territory on a 4 KB page system.

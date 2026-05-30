@@ -103,13 +103,11 @@ flare.utils    - POSIX FFI thunks (fork / waitpid / kill / usleep /
                  exit / getpid) the Mojo stdlib doesn't expose yet
 ```
 
-Each layer mostly imports from layers below it. Two known cross-layer
-dependencies are tracked as v0.9 refactor debt: ``flare.runtime``'s
-scheduler imports ``flare.http`` to construct workers, and
+Each layer mostly imports from layers below it. The runtime
+scheduler reaches into ``flare.http`` to construct workers, and
 ``flare.http`` re-imports ``flare.http2`` for the unified reactor
-dispatch. See the ``TODO(v0.9)`` / ``NOTE(v0.9)`` headers in
-``flare/http/_server_reactor_impl.mojo`` and
-``flare/http/_unified_reactor_impl.mojo`` for the breakup plan.
+dispatch; both shapes are tracked as cleanup work in the source
+under ``# TODO`` headers.
 
 ## HTTP requests
 
@@ -202,12 +200,10 @@ def main() raises:
 
 The concrete ``PathInt`` / ``PathStr`` / ``QueryInt`` / ``HeaderStr``
 / etc. extractors expose ``.value`` directly as the parsed primitive.
-The earlier ``Path[T: ParamParser, name]`` parametric layer was
-removed in v0.8 because it never carried a custom ``ParamParser``
-impl in practice; custom types belong as their own ``Extractor``
-struct. Value-constructor extractors
-(``PathInt["id"].extract(req)``) are also available for use inside
-plain ``def`` handlers when the struct shape is overkill.
+Custom types are handled by writing your own ``Extractor`` struct.
+Value-constructor extractors (``PathInt["id"].extract(req)``) are
+also available for use inside plain ``def`` handlers when the
+struct shape is overkill.
 
 ## Static route tables: ``ComptimeRouter``
 
@@ -531,19 +527,14 @@ def main() raises:
 """
 
 # ─────────────────────────────────────────────────────────────────────────
-# Curated root surface (v0.8).
+# Curated root surface.
 #
 # Root re-exports are restricted to the most-used types the typical
 # flare application reaches for. Lower-level codecs (HTTP/2 frames,
 # QUIC varints, HPACK Huffman, gRPC LPM internals, runtime advanced
 # primitives, internal SIMD / intern helpers) live behind their
-# respective submodules. For the v0.7-era "everything at the top
-# level" feel, use ``from flare.prelude import *``.
-#
-# Architecture note:
-#   ``scheduler -> http`` and ``http <-> http2`` are tracked v0.9
-#   refactors. See ``# TODO(v0.9)`` headers in the corresponding
-#   modules.
+# respective submodules. For an "everything at the top level" feel,
+# use ``from flare.prelude import *``.
 # ─────────────────────────────────────────────────────────────────────────
 
 # Errors
@@ -575,7 +566,7 @@ from .http.error import HttpError, TooManyRedirects
 from .http.static_response import precompute_response
 from .http.cookie import Cookie, CookieJar, parse_set_cookie_header
 
-# Extractors (concrete, no parametric layer post-v0.8 §5.3)
+# Extractors (concrete; custom types belong as their own Extractor struct)
 from .http.extract import (
     Extractor,
     PathInt,

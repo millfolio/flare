@@ -92,13 +92,12 @@ templates::
                 raise Error("missing path parameter: " + String(Self.name))
             self.value = Uuid.parse(req.param(String(Self.name)))
 
-The earlier ``Path[T: ParamParser, name]`` / ``ParamInt`` /
-``ParamString`` parametric layer is deleted in v0.8: the concrete
-extractors exposed everything the parametric layer did, with no
-``.value.value`` chain, and the parametric layer never saw a custom
-``ParamParser`` impl in practice. Custom types belong as their own
-``Extractor`` struct anyway -- the indirection through a wrapper
-trait gave no leverage.
+Custom types belong as their own ``Extractor`` struct directly --
+the framework deliberately does not expose a parametric
+``Path[T: ParamParser, name]`` shape, because in practice it
+adds a ``.value.value`` chain at every call site without
+carrying a parser implementation that could not just live in
+the ``Extractor`` itself.
 
 ## Parse-failure handling
 
@@ -127,12 +126,13 @@ from ..net import IpAddr, SocketAddr
 
 # ── Scalar parsing helpers ──────────────────────────────────────────────────
 #
-# These were originally exposed via the ``ParamInt`` / ``ParamFloat64`` /
-# ``ParamBool`` / ``ParamString`` wrappers + ``ParamParser`` trait. The
-# wrappers added a ``.value.value`` chain at every concrete-extractor call
-# site and never carried a custom ``ParamParser`` impl, so the layer
-# collapsed in v0.8. The parsing logic lives here as private helpers; the
-# 20 concrete extractors below call them directly.
+# These were originally exposed via ``ParamInt`` / ``ParamFloat64`` /
+# ``ParamBool`` / ``ParamString`` wrappers plus a ``ParamParser`` trait,
+# but the wrappers added a ``.value.value`` chain at every concrete-
+# extractor call site without carrying a custom ``ParamParser`` impl in
+# practice, so the parametric layer was collapsed. The parsing logic
+# lives here as private helpers; the 20 concrete extractors below call
+# them directly.
 
 
 @always_inline

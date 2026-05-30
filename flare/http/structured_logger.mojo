@@ -1,6 +1,6 @@
 """Structured (JSON-shaped) request logger middleware.
 
-The v0.6 ``Logger[Inner]`` middleware in :mod:`flare.http.middleware`
+The plain ``Logger[Inner]`` middleware in :mod:`flare.http.middleware`
 emits one space-delimited line per request:
 
     [flare] GET /users 200 12ms
@@ -30,7 +30,7 @@ Field selection rationale (vs Apache common log / nginx default):
   precision in the value to keep the line compact.
 - ``method`` / ``url`` / ``status``: the obvious request triple.
 - ``latency_ms``: ``perf_counter_ns`` delta divided by 1_000_000.
-  Same shape v0.6 ``Logger`` already emits — but as a number,
+  Same shape the plain ``Logger`` already emits — but as a number,
   not a "12ms" string.
 - ``request_id``: pulled from ``X-Request-Id`` on the response
   (the same header the existing ``RequestId[Inner]`` middleware
@@ -176,7 +176,7 @@ struct StructuredLogger[Inner: Handler & Copyable & Defaultable](
     / ``latency_ms``.
 
     Construct via the default factory or with an explicit
-    inner handler, mirroring the v0.6 ``Logger`` shape:
+    inner handler, mirroring the plain ``Logger`` shape:
 
         ``StructuredLogger[Router](Router())``
 

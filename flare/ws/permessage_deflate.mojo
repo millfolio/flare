@@ -19,7 +19,7 @@ Wire shape (RFC 7692 §7.2):
 
 Two codec paths are exposed:
 
-- **No-context-takeover** (the v0.7 default; safest under RFC
+- **No-context-takeover** (the default; safest under RFC
   7692 §7.1.1.1 / §7.1.1.2): every message is compressed against
   a fresh sliding window. The free functions
   :func:`compress_message` and :func:`decompress_message`
@@ -109,7 +109,7 @@ struct PermessageDeflateConfig(Copyable, Defaultable, Movable):
     """Per-side knobs for the permessage-deflate extension.
 
     All four RFC 7692 §7.1 parameters are surfaced for negotiation
-    + symmetry, even though the v0.7 codec implementation always
+    + symmetry, even though the codec implementation always
     runs with ``no_context_takeover`` on both sides (see module
     docstring). ``max_window_bits`` <= 15 is accepted; the codec
     never produces output that violates the cap because raw
@@ -124,17 +124,17 @@ struct PermessageDeflateConfig(Copyable, Defaultable, Movable):
 
     var server_no_context_takeover: Bool
     """Whether the server MUST reset its LZ77 context at the end
-    of each message. v0.7 always enforces ``True`` regardless of
-    this value -- surfaced for handshake honesty."""
+    of each message. The codec always enforces ``True`` regardless
+    of this value -- surfaced for handshake honesty."""
 
     var client_no_context_takeover: Bool
     """Whether the client MUST reset its LZ77 context at the end
-    of each message. v0.7 always enforces ``True`` regardless of
-    this value -- surfaced for handshake honesty."""
+    of each message. The codec always enforces ``True`` regardless
+    of this value -- surfaced for handshake honesty."""
 
     var server_max_window_bits: Int
     """Max bits in the LZ77 sliding window the server is willing
-    to use. Range 8..15; v0.7 always operates at 15."""
+    to use. Range 8..15; the codec always operates at 15."""
 
     var client_max_window_bits: Int
     """Same as :attr:`server_max_window_bits` for the client

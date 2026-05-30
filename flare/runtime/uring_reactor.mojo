@@ -432,7 +432,7 @@ struct UringReactor(Movable):
 
         Args:
             entries: SQE count (kernel rounds up to a power of
-                two; default 256 matches the v0.6 epoll
+                two; default 256 matches the epoll
                 ``max_events`` budget so the per-worker memory
                 footprint is comparable).
             setup_flags: Bitwise-OR of ``IORING_SETUP_*`` flags

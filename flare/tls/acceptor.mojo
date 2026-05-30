@@ -155,7 +155,7 @@ struct TlsServerConfig(Copyable, Movable):
     RFC 8446 §4.6.1 NewSessionTicket frames (TLS 1.3) so peers
     can resume on subsequent connects. Cheap to keep on; turn
     off only for environments where ticket-key rotation is not
-    handled out-of-band (the v0.7 acceptor does not auto-rotate
+    handled out-of-band (the acceptor does not auto-rotate
     -- the ``flare_ssl_ctx_enable_session_tickets`` FFI permits
     rotation but the acceptor doesn't expose the hook yet)."""
     var ticket_lifetime_s: Int

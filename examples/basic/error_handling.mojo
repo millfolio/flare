@@ -6,8 +6,6 @@
 # All flare errors implement Writable (print() and String()).
 # Every error includes enough context to debug without a stack trace.
 #
-# Phase 1 — flare.net.error (working)
-#
 # Usage:
 # pixi run example-errors
 

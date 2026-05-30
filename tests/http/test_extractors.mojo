@@ -5,12 +5,6 @@ The path/query/header concrete extractors are exercised in
 the orthogonal surface: body extractors (``BodyBytes``,
 ``BodyText``, ``Json``) and the reflective ``Extracted[H]`` adapter
 that turns a handler struct into a single request handler.
-
-The v0.7 parametric ``Path[T: ParamParser, name]`` layer was deleted
-in v0.8 (the wrappers added a ``.value.value`` chain at every call
-site and never carried a custom ``ParamParser`` impl in practice);
-the equivalent test coverage now lives in the concrete-extractor
-file.
 """
 
 from std.testing import (

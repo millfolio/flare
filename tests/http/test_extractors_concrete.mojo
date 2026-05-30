@@ -2,8 +2,10 @@
 
 These types expose ``.value`` as the parsed primitive directly
 (``Int``, ``String``, ``Float64``, ``Bool``) — no ``.value.value``
-wrapper chain. The v0.7 parametric ``Path[T: ParamParser, name]``
-layer that introduced the chain was deleted in v0.8.
+wrapper chain. The framework deliberately does not expose a
+parametric ``Path[T: ParamParser, name]`` layer (that shape was
+prototyped, found to add a wrapper chain at every call site
+without carrying real custom parsers, and removed).
 
 Covers:
 

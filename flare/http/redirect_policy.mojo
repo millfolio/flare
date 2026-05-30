@@ -1,6 +1,6 @@
 """HTTP redirect policy: configurable cross-origin + auth gating.
 
-The v0.6 ``HttpClient`` follows redirects unconditionally up to a
+The default ``HttpClient`` follows redirects unconditionally up to a
 configurable hop count and silently strips state-changing methods
 (POST → GET on 301/302/303, per the spec). That covers the
 80% case but leaves three sharp edges for callers who care:
@@ -38,7 +38,7 @@ Public surface:
   header).
 
 The decision-helper :meth:`RedirectPolicy.decide` is pure (no
-network), so the v0.6 :class:`HttpClient` can be retrofitted onto
+network), so the :class:`HttpClient` can be retrofitted onto
 it in a follow-up commit without touching the policy logic. It
 also makes the policy unit-testable in isolation, which is the
 entire point — each cross-origin / auth-forwarding rule has an
@@ -55,9 +55,9 @@ from flare.http import (
 # refuse to forward Authorization across origins.
 var pol = RedirectPolicy.same_origin_only(max_redirects=5)
 
-# Equivalent open-redirect-tolerant configuration (the v0.6
+# Equivalent open-redirect-tolerant configuration (the legacy
 # default, byte-for-byte):
-var pol_v06 = RedirectPolicy.follow_all(max_redirects=10)
+var pol_legacy = RedirectPolicy.follow_all(max_redirects=10)
 ```
 """
 
@@ -77,7 +77,7 @@ struct RedirectMode:
 
     comptime FOLLOW_ALL: Int = 0
     """Follow any 3xx with a Location header, no origin gating.
-    The v0.6 ``HttpClient`` default — preserves byte-for-byte
+    The legacy ``HttpClient`` default — preserves byte-for-byte
     behaviour."""
 
     comptime SAME_ORIGIN_ONLY: Int = 1
@@ -221,7 +221,7 @@ struct RedirectPolicy(Copyable, Defaultable, Movable):
     Construct via the named factories rather than the raw
     ``__init__`` for readable call sites:
 
-        ``RedirectPolicy.follow_all()``        # v0.6 default
+        ``RedirectPolicy.follow_all()``        # legacy default
         ``RedirectPolicy.same_origin_only()``  # security-default
         ``RedirectPolicy.deny()``              # never follow
     """
@@ -231,7 +231,7 @@ struct RedirectPolicy(Copyable, Defaultable, Movable):
     var forward_auth_cross_origin: Bool
 
     def __init__(out self):
-        """Default policy: matches v0.6 ``HttpClient`` behaviour
+        """Default policy: matches legacy ``HttpClient`` behaviour
         (FOLLOW_ALL, max_redirects=10, no auth forwarding to
         cross-origin)."""
         self.max_redirects = 10

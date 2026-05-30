@@ -121,7 +121,7 @@ if [[ "$(uname)" != "Darwin" ]]; then
     export LD_PRELOAD="${LD_PRELOAD:+${LD_PRELOAD}:}${INSTALLED}"
 fi
 
-# ── flare brotli FFI wrapper (v0.6 Track I) ─────────────────────────────────
+# ── flare brotli FFI wrapper ────────────────────────────────────────────────
 # Build is conditional on libbrotli being present; flare's [dependencies]
 # pull libbrotlicommon/dec/enc from conda-forge so the default env always
 # satisfies it. If the encoder/decoder headers are missing we skip the
@@ -155,7 +155,7 @@ else
     echo "libbrotli not installed — skipping libflare_brotli.so"
 fi
 
-# ── flare fs FFI wrapper (v0.6 Track H) ─────────────────────────────────
+# ── flare fs FFI wrapper ────────────────────────────────────────────────────
 # Wraps libc open/close/read so flare's FileServer can avoid colliding
 # with Mojo stdlib's internal external_call signatures for those names.
 FS_TARGET="$BUILD_DIR/libflare_fs.so"

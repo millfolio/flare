@@ -175,12 +175,12 @@ from flare.http2.state import (
 # signals that parser plumbing is incomplete -- only
 # ``allow_lf_only_line_endings`` and ``allow_obs_fold`` drive
 # parser branches today; the rest of the named flags are public
-# contract surface that the v0.9 audit pass will wire end-to-end.
+# contract surface that a follow-up audit pass will wire
+# end-to-end.
 from flare.http.proto.h1_leniency import _ExperimentalH1LeniencyConfig
 
-# Zero-validation ASCII -> String helper (closes critique
-# register §C4). Promoted from the reactor-coupled
-# ``flare.http.server`` to the sans-I/O parser layer because
-# every consumer (H1 message parser, H2 wire codec, HPACK,
-# gRPC metadata) is parser-shaped.
+# Zero-validation ASCII -> String helper. Promoted from the
+# reactor-coupled ``flare.http.server`` to the sans-I/O parser
+# layer because every consumer (H1 message parser, H2 wire codec,
+# HPACK, gRPC metadata) is parser-shaped.
 from flare.http.proto.ascii import ascii_unchecked_string

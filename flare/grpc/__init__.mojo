@@ -16,10 +16,10 @@ gRPC is a 4-layer protocol on top of HTTP/2:
 4. **Codegen** -- proto3 message + service codegen. Not in this
    commit; the framing + status layers are the prerequisite.
 
-This commit establishes the bottom two layers (framing + status).
+This module establishes the bottom two layers (framing + status).
 The call shapes + codegen build on top of these in later commits;
-the v0.7 HTTP/2 reactor already provides the stream multiplexer
-they need.
+the HTTP/2 reactor already provides the stream multiplexer they
+need.
 
 Public re-exports:
 

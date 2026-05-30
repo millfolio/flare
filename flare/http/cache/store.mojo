@@ -56,8 +56,8 @@ struct CacheEntry(Copyable, Movable):
         """Build a ``CacheEntry`` with empty/defaulted freshness
         metadata. Used by callers that don't yet care about
         RFC 9111 freshness (single-shot tests, naïve middleware
-        wrappers). The :func:`Cache` middleware (Phase D2) builds
-        entries via the explicit constructor with parsed fields.
+        wrappers). The :func:`Cache` middleware builds entries
+        via the explicit constructor with parsed fields.
         """
         return Self(
             status=status,

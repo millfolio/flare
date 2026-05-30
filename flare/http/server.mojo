@@ -237,7 +237,7 @@ struct HttpServer(Movable):
     var _extra_listener_fds: List[Int]
     """Raw fds of additional listeners attached via
     :meth:`bind_many`. Empty when constructed via the single-
-    address :meth:`bind` (the default; preserves the v0.6 / v0.7
+    address :meth:`bind` (the default; preserves the original
     single-listener behaviour byte-for-byte).
 
     These fds are owned by the ``HttpServer`` -- they're closed
@@ -354,14 +354,14 @@ struct HttpServer(Movable):
         (already-bound listeners are dropped + closed by the
         ``TcpListener.__del__``).
 
-        Multi-listener mode is **single-worker only** in v0.7.
+        Multi-listener mode is **single-worker only** today.
         ``HttpServer.serve(handler, num_workers=N)`` with
         ``N >= 2`` raises when extras are present; the
         ``SO_REUSEPORT`` multi-worker path is N-fds-on-one-
-        address and is orthogonal. v0.7.x roadmap considers a
-        cross-product N-listeners x M-workers shape; today the
-        right multi-worker path stays through ``bind`` +
-        ``num_workers``.
+        address and is orthogonal. A cross-product
+        N-listeners x M-workers shape is a future addition;
+        today the right multi-worker path stays through
+        ``bind`` + ``num_workers``.
 
         Args:
             addrs: One or more local addresses to listen on.
@@ -527,11 +527,11 @@ struct HttpServer(Movable):
         else:
             if len(self._extra_listener_fds) > 0:
                 raise Error(
-                    "HttpServer.bind_many is single-worker only in v0.7;"
+                    "HttpServer.bind_many is single-worker only;"
                     " pass num_workers=1 (or omit it). Multi-worker uses"
                     " SO_REUSEPORT (N fds on one address); multi-listener"
                     " is N distinct addresses on one worker. The cross"
-                    " product (N x M) lands in v0.7.x."
+                    " product (N x M) is a future addition."
                 )
             self._serve_multicore[FnHandler](h^, num_workers, pin_cores)
 
@@ -541,9 +541,9 @@ struct HttpServer(Movable):
         The arity-1 overload that accepts ``Handler``-only types
         without requiring ``Copyable``. This is the right entry
         point for ``Router`` (which carries heap-allocated boxed
-        struct handlers and isn't safely Copyable yet -- see the
-        v0.7.x roadmap), middleware-wrapping handler chains
-        whose innermost element is a ``Router``, or any other
+        struct handlers and is not safely ``Copyable`` for every
+        struct shape), middleware-wrapping handler chains whose
+        innermost element is a ``Router``, or any other
         ``Handler``-only struct.
 
         For multi-worker mode (``num_workers >= 2``), the handler
@@ -687,11 +687,11 @@ struct HttpServer(Movable):
         else:
             if len(self._extra_listener_fds) > 0:
                 raise Error(
-                    "HttpServer.bind_many is single-worker only in v0.7;"
+                    "HttpServer.bind_many is single-worker only;"
                     " pass num_workers=1 (or omit it). Multi-worker uses"
                     " SO_REUSEPORT (N fds on one address); multi-listener"
                     " is N distinct addresses on one worker. The cross"
-                    " product (N x M) lands in v0.7.x."
+                    " product (N x M) is a future addition."
                 )
             self._serve_multicore[H](handler^, num_workers, pin_cores)
 

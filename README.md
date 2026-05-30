@@ -28,11 +28,11 @@ def main() raises:
 
 ## Why flare
 
-- **Batteries included:** HTTP/1.1 + HTTP/2, WebSocket (RFC 6455 + permessage-deflate with context-takeover), TLS 1.2/1.3 with ALPN, signed cookies, sessions, multipart, gzip + brotli, CORS, static files, SSE, templates with `{% block %}` / `{% extends %}` inheritance, RFC 9111 HTTP cache primitives, gRPC framing + Status + Metadata, an OpenAPI 3.1 spec emitter, sans-I/O HTTP/3 + QUIC codec primitives, `Retry` + `Timeout` reliability middleware, mTLS, and the PROXY protocol all live in `flare/`. Full inventory in [`docs/features.md`](docs/features.md).
-- **Composable by types, not callbacks:** `Handler` is a trait. `Router`, `App[S]`, middleware, and typed extractors (`PathInt`, `QueryInt`, `Form[T]`, `Json[T]`, `Cookies`) compose by nesting structs. The compiler monomorphises the handler chain into one direct call sequence per request type — no virtual dispatch through the chain.
+- **Batteries included:** HTTP/1.1 + HTTP/2, WebSocket (RFC 6455 + permessage-deflate with context-takeover), TLS 1.2/1.3 with ALPN, signed cookies, sessions, multipart, gzip + brotli, CORS, static files, SSE, templates with `{% block %}` / `{% extends %}` inheritance, RFC 9111 HTTP cache (`Cache[Inner, S]` middleware over `InMemoryCacheStore`, conditional revalidation), gRPC sans-I/O codec primitives (LPM framing + Status + Metadata; the HTTP/2 server adapter ships in a follow-up release), an OpenAPI 3.1 spec emitter, sans-I/O HTTP/3 + QUIC codec primitives, `Retry` + `PostHocDeadline` reliability middleware, mTLS, and the PROXY protocol all live in `flare/`. Full inventory in [`docs/features.md`](docs/features.md).
+- **Composable by types, not callbacks:** `Handler` is a trait. `Router`, middleware, and typed extractors (`PathInt`, `QueryInt`, `Form[T]`, `Json[T]`, `Cookies`) compose by nesting structs. The compiler monomorphises the handler chain into one direct call sequence per request type — no virtual dispatch through the chain.
 - **Hard to misuse under load:** Per-request `Cancel` tokens, graceful drain, sanitized 4xx/5xx, TLS cert reload, structured logging, Prometheus metrics. A `TestClient[H]` drives handlers in-process without binding a port for fast unit tests.
 - **Fast, with a tight tail:** Thread-per-core reactor (`kqueue` / `epoll`, opt-in `io_uring`). On a 4-worker plaintext bench, flare's handler path posts the best median p99 of the pack against `hyper` / `axum` / `actix_web`. [Numbers below.](#performance)
-- **Fuzzed:** 35 fuzz harnesses, 8M+ runs, zero known crashes. ASan and assert-mode coverage on every FFI boundary.
+- **Fuzzed:** 40 fuzz harnesses, 9M+ runs, zero known crashes. ASan and assert-mode coverage on every FFI boundary.
 
 ## Install
 
@@ -179,10 +179,10 @@ def main() raises:
     HttpServer.bind(SocketAddr.localhost(8080)).serve(r^, num_workers=4)
 ```
 
-**App state + middleware composition:** `App[S]` carries shared state alongside an inner handler; `state_view()` hands out a borrow that middleware can read or mutate. The compiler monomorphises the whole nested chain into one direct call sequence per request type, with no virtual dispatch and no per-request allocation.
+**Shared state + middleware composition:** When a handler needs application-scoped state, build a `Handler` struct that captures the state by value. Middleware is itself a `Handler` that holds another `Handler`, so layers stack by nesting constructors. The compiler monomorphises the whole nested chain into one direct call sequence per request type, with no virtual dispatch and no per-request allocation. For shared mutation across worker copies, hold the state behind a `flare.runtime.Pool` heap address.
 
 ```mojo
-from flare.http import App, Router, Request, Response, Handler, State, ok, HttpServer
+from flare.http import Router, Request, Response, Handler, ok, HttpServer
 from flare.net import SocketAddr
 
 @fieldwise_init
@@ -194,22 +194,20 @@ def home(req: Request) raises -> Response:
 
 @fieldwise_init
 struct WithHits[Inner: Handler](Handler):
-    var inner:    Self.Inner
-    var snapshot: State[Counters]
+    var inner: Self.Inner
+    var counters: Counters
 
     def serve(self, req: Request) raises -> Response:
         var resp = self.inner.serve(req)
-        resp.headers.set("X-Hits", String(self.snapshot.get().hits))
+        resp.headers.set("X-Hits", String(self.counters.hits))
         return resp^
 
 def main() raises:
     var router = Router()
     router.get("/", home)
-    var app  = App(state=Counters(hits=0), handler=router^)
-    var view = app.state_view()
 
     var srv = HttpServer.bind(SocketAddr.localhost(8080))
-    srv.serve(WithHits(inner=app^, snapshot=view^))
+    srv.serve(WithHits(inner=router^, counters=Counters(hits=37)))
 ```
 
 For the static-response fast path (`serve_static`), `serve_comptime[handler, config]` with build-time invariant checks, the multi-worker shared-listener mode (`HttpServer.serve(handler, num_workers=N)`), and the cross-worker `WorkerHandoffPool` (`FLARE_SOAK_WORKERS=on`), see [`docs/cookbook.md`](docs/cookbook.md) and the linked examples.
@@ -286,20 +284,24 @@ flare.io       BufReader (Readable trait, generic buffered reader)
 flare.ws       WebSocket client + server (RFC 6455, permessage-deflate
                with context-takeover, WS-over-h2)
 flare.http     HTTP/1.1 client + reactor server + Cancel + Handler /
-               Router / App + middleware (Logger / RequestId / Compress
-               / Cors / Retry / Timeout / Conditional / Cache primitives)
+               Router + middleware (Logger / RequestId / Compress
+               / Cors / Retry / PostHocDeadline / Conditional / Cache)
                + sans-I/O parser sublayer under flare.http.proto.*
                + template engine with {% block %} / {% extends %}
 flare.http2    HTTP/2 frame codec, HPACK (with table-driven Huffman
                fast decoder), stream state, h2c upgrade, RFC 8441
                Extended CONNECT, per-stream RST_STREAM Cancel propagation
-flare.http.cache  RFC 9111 cache primitives — CacheControl directive parser,
-               CacheKey, InMemoryCacheStore
-flare.grpc     gRPC primitives on the flare.http2 reactor: LPM framing,
-               canonical Status codes, Metadata carrier
+flare.http.cache  RFC 9111 cache: CacheControl directive parser,
+               CacheKey + Vary-aware secondary key, bounded
+               InMemoryCacheStore, Cache[Inner, S] wrapping
+               middleware (freshness check, conditional revalidation)
+flare.grpc     Sans-I/O gRPC codec primitives: LPM framing, canonical
+               Status codes, Metadata carrier (HTTP/2 server adapter
+               ships in a follow-up release)
 flare.openapi  OpenAPI 3.1 spec model + deterministic JSON emitter
 flare.quic     Sans-I/O QUIC v1 codec primitives (varint + long/short
-               packet headers; reactor + TLS + CC drive land in v0.9)
+               packet headers; reactor + TLS + CC drive land alongside
+               the QUIC server in a follow-up release)
 flare.h3       Sans-I/O HTTP/3 frame codec + SETTINGS payload
 flare.crypto   HMAC-SHA256, base64url (signed cookies, sessions)
 flare.tls      TLS 1.2/1.3 (OpenSSL, both client and server, session
@@ -321,7 +323,7 @@ Each layer imports only from layers below it. No circular dependencies. The full
 
 ## Security
 
-Per-layer security posture and the sanitised-error-response policy live in [`docs/security.md`](docs/security.md). Highlights: RFC 7230 token validation, configurable size limits, sanitised 4xx/5xx bodies, TLS 1.2+ only, WebSocket frame masking + UTF-8 validation, 35 fuzz harnesses with 8M+ runs and zero known crashes.
+Per-layer security posture and the sanitised-error-response policy live in [`docs/security.md`](docs/security.md). Highlights: RFC 7230 token validation, configurable size limits, sanitised 4xx/5xx bodies, TLS 1.2+ only, WebSocket frame masking + UTF-8 validation, 40 fuzz harnesses with 9M+ runs and zero known crashes.
 
 For security issues, please open a private security advisory on GitHub or email the maintainer directly.
 
@@ -349,7 +351,7 @@ Common tasks (run with `pixi run [--environment <env>] <task>`):
 | `tests` | `default` | Full unit + integration suite plus every example under [`examples/`](examples/) |
 | `format-check` / `format` | `default` / `dev` | `mojo format` over `flare`, `tests`, `benchmark`, `examples`, `fuzz` |
 | `docs` / `docs-build` | `dev` | mojodoc-rendered package docstring (live or static) |
-| `fuzz-all` | `fuzz` | Every harness in [`fuzz/`](fuzz/) (35 harnesses, 8M+ runs combined) |
+| `fuzz-all` | `fuzz` | Every harness in [`fuzz/`](fuzz/) (40 harnesses, 9M+ runs combined) |
 | `fuzz-<name>` / `prop-<name>` | `fuzz` | Single harness — see [`pixi.toml`](pixi.toml) for the full list |
 | `bench-vs-baseline-quick` | `bench` | flare vs Go `net/http`, throughput config (~7 min) |
 | `bench-vs-baseline` | `bench` | flare vs all baselines (Go, nginx, hyper, axum, actix_web), all configs |
@@ -361,7 +363,7 @@ Common tasks (run with `pixi run [--environment <env>] <task>`):
 
 ```bash
 pixi run tests                                          # full suite + every example under examples/
-pixi run --environment fuzz fuzz-all                    # 35 harnesses
+pixi run --environment fuzz fuzz-all                    # 40 harnesses
 pixi run --environment bench bench-vs-baseline-quick    # ~7 min
 ```
 

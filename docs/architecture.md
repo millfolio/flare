@@ -2,12 +2,14 @@
 
 flare is a layered library. Higher layers depend on lower layers and peer
 modules at the same layer don't import each other — with two known
-cross-layer dependencies tracked as v0.9 refactor debt: `flare.runtime`'s
-scheduler module imports `flare.http` to construct workers, and `flare.http`
-re-imports `flare.http2` for the unified reactor dispatch (the cycle is
-broken by extracting wire types to `flare.http.wire` in v0.9; see the
-`TODO(v0.9)` headers in `flare/http/_server_reactor_impl.mojo` and
-`flare/http/_unified_reactor_impl.mojo`). No global state, no hidden runtime.
+cross-layer dependencies tracked as cleanup work in the source: the
+runtime scheduler module reaches into `flare.http` to construct workers,
+and `flare.http` re-imports `flare.http2` for the unified reactor
+dispatch (the cycle is broken by extracting wire types to
+`flare.http.wire` in a later iteration; see the `# TODO` headers in
+`flare/http/_server_reactor_impl.mojo` and
+`flare/http/_unified_reactor_impl.mojo`). No global state, no hidden
+runtime.
 
 ```
 flare.io       BufReader (Readable trait, generic buffered reader)
@@ -59,8 +61,8 @@ flare.http     HTTP/1.1 client + reactor server + Handler / Router
                connection pool + h2c-via-Upgrade client.
                Sans-I/O parser sublayer under flare.http.proto.*
                with _ExperimentalH1LeniencyConfig (future-policy
-               knobs; strict default is the only wire shape
-               v0.8 enforces); conformance corpora under
+               knobs; the strict default is the only wire shape
+               currently enforced); conformance corpora under
                conformance/h1/ + conformance/ws/. Template
                engine with single-level inheritance via {% block %}
                + {% extends %}. RFC 9111 cache primitives --
@@ -74,8 +76,8 @@ flare.grpc     Sans-I/O gRPC codec primitives: length-prefixed
                Metadata carrier (binary / text key discipline).
                The HTTP/2 server adapter (request dispatch into
                unary / server-streaming / client-streaming /
-               bidi shapes, grpc-go interop) ships in v0.9 on
-               top of these wire primitives.
+               bidi shapes, grpc-go interop) ships in a follow-up
+               release on top of these wire primitives.
 flare.openapi  OpenAPI 3.1 spec model + deterministic JSON
                emitter (stable key order for diffable specs).
                Auto-derivation from ComptimeRouter +
@@ -287,7 +289,7 @@ Both terminal handles run in the same reactor (`epoll` /
 (`EPOLLEXCLUSIVE` shared listener vs per-worker `SO_REUSEPORT`
 based on `FLARE_REUSEPORT_WORKERS`), and produce the same
 `flare.http.Response` -- so the entire application surface
-(`Router`, `App[S]`, every middleware, every typed extractor,
+(`Router`, every middleware, every typed extractor,
 `Cancel`, `Session[T]`, `FileServer`, content negotiation,
 structured logging, Prometheus metrics, auth extractors,
 `CsrfToken`, templates) works identically on both wires.

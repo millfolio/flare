@@ -18,10 +18,10 @@ lifecycle invariants.
 
 | Asset | Why it matters |
 |---|---|
-| Process memory | Contains in-flight request bodies, headers, possibly secrets passed through `App[S]`. |
+| Process memory | Contains in-flight request bodies, headers, possibly secrets held in handler state. |
 | TLS private keys | A compromise here ends the trust story. |
 | Server identity (cert) | Trust + signing chain. |
-| Application state | Whatever `App[S]` carries (typically DB pools, signing keys, session secrets). |
+| Application state | Whatever the handler-captured state carries (typically DB pools, signing keys, session secrets). |
 | Logs | May contain PII, request IDs, and (in dev) error messages with user input. |
 | Disk (cache, sessions) | `FilesystemCacheStore`, `InMemorySessionStore` overflows, etc. |
 
@@ -47,13 +47,13 @@ existing credentials.
 
 | Attack | Mitigation in flare |
 |---|---|
-| Malformed HTTP/1.1 request (header injection, smuggling, CRLF). | `flare.http.proto` is a sans-I/O parser with RFC 7230 / 9112 token validation. CR / LF / NUL rejected at parse time; multiple `Content-Length` rejected. TE-chunked-with-CL rejected. Conformance suite under `conformance/h1/` covers the negative cases. The strict default is the only wire policy v0.8 enforces today, and is the production-safe pick. `_ExperimentalH1LeniencyConfig` is a **future-policy** carrier — its leading underscore + `_Experimental` prefix mark it as an unstable surface; only `allow_lf_only_line_endings` and `allow_obs_fold` have parser-side plumbing today, and even those default off. The rest of the named relaxations land in v0.9 alongside the per-flag plumbing; do not rely on them changing parser behavior in v0.8. |
+| Malformed HTTP/1.1 request (header injection, smuggling, CRLF). | `flare.http.proto` is a sans-I/O parser with RFC 7230 / 9112 token validation. CR / LF / NUL rejected at parse time; multiple `Content-Length` rejected. TE-chunked-with-CL rejected. Conformance suite under `conformance/h1/` covers the negative cases. The strict default is the only wire policy currently enforced and is the production-safe pick. `_ExperimentalH1LeniencyConfig` is a **future-policy** carrier — its leading underscore + `_Experimental` prefix mark it as an unstable surface; only `allow_lf_only_line_endings` and `allow_obs_fold` have parser-side plumbing today, and even those default off. The rest of the named relaxations land in a follow-up release alongside the per-flag plumbing; do not rely on them changing parser behavior today. |
 | Slowloris-style header flood. | `ServerConfig.max_header_list_size` caps the header bytes the server will accept before closing; default 8 KiB. The reactor's per-connection read timeout (configurable) shuts the socket on stalls. |
 | Large body upload to exhaust memory. | `ServerConfig.max_body_bytes` (default 10 MiB) is checked at the parser layer before allocating. Multipart streaming is opt-in; the default body-buffering path enforces the cap. |
 | HTTP/2 rapid-reset flood (CVE-2023-44487). | `SETTINGS_MAX_CONCURRENT_STREAMS = 100` advertised in the preface bounds the rapid-reset budget per connection. Cancellation cost is constant; no goroutine-per-stream allocation lurks behind the abstraction. |
 | HTTP/2 priority frame abuse. | flare's H2 driver ignores PRIORITY (RFC 9113 §5.3.1 deprecation); never builds the priority tree, so priority-tree attacks have no surface. |
 | HPACK decoding DoS (HEADERS bomb). | The HPACK decoder enforces `SETTINGS_MAX_HEADER_LIST_SIZE`; once the limit is exceeded the stream is RST'd with `ENHANCE_YOUR_CALM`. The dynamic table size is capped via SETTINGS. |
-| HPACK Huffman DoS (compression oracle). | The decoder is constant-time relative to input length; the new table-driven kernel (v0.8) does not branch on payload content. |
+| HPACK Huffman DoS (compression oracle). | The decoder is constant-time relative to input length; the table-driven kernel does not branch on payload content. |
 | permessage-deflate zip-bomb. | Per-message decompressed-size cap (default 16 MiB) is enforced before allocation. Exceeding the cap raises and the WS connection is closed with 1009 (`MESSAGE_TOO_BIG`). Both the no-context-takeover and context-takeover code paths honour the cap. |
 | TLS downgrade. | TLS 1.2+ only, weak ciphers disabled (`flare.tls.config` whitelist). No TLS 1.0 / 1.1 fallback path exists. |
 | TLS session-ticket replay. | flare emits new tickets on every handshake; the OpenSSL rotation key is part of the TlsAcceptor and rotates with `reload`. |
@@ -71,7 +71,7 @@ cookie, API key, etc).
 | Path traversal via static files. | `FileServer` rejects `..`, NUL, absolute paths at the request layer; only resolves relative paths under the declared root. |
 | Cookie tampering on signed sessions. | `signed_cookie_*` and `Session[T]` use HMAC-SHA256; invalid HMACs are rejected at the extractor layer, so the handler never sees a forged session. Key rotation is supported via `signed_cookie_decode_keys` (multiple keys, oldest-last). |
 | Replay of stolen session cookie. | Session contents include a server-side expiry; out-of-band rotation requires app-level support. flare does not bind sessions to TLS exporter or client IP; that decision is application policy. |
-| CSRF. | flare does not ship CSRF middleware in v0.8. SameSite cookie attributes are honoured (`Cookie.same_site`), but the framework cannot defend against application-level CSRF on its own. **You must** require a CSRF token on state-changing requests. |
+| CSRF. | flare does not ship CSRF middleware. SameSite cookie attributes are honoured (`Cookie.same_site`), but the framework cannot defend against application-level CSRF on its own. **You must** require a CSRF token on state-changing requests. |
 | XSS via reflected error message. | Sanitised-error policy: 4xx responses use a fixed status reason; the raised message is logged but not echoed. The Compress middleware and StaticResponse path do not auto-link or interpret content. |
 | Open redirect via Location header. | `Redirect` honours absolute URLs verbatim. **Validate the redirect target** if you build it from user input. |
 
@@ -86,7 +86,7 @@ a malicious origin, a hostile WS client).
 | Request smuggling between flare and an upstream. | flare's H1 parser rejects ambiguous framing (TE+CL, multiple CL). When fronting another HTTP server, prefer HTTP/2 to the upstream where possible -- the H1 ambiguity surface is the issue, not flare. |
 | H2 frame fuzzing from peer. | `fuzz/fuzz_h2_frame.mojo` exercises the codec for >= 200K runs per cycle. The current corpus has zero open crashes. |
 | HPACK fuzzing from peer. | Mirror harness: `fuzz/fuzz_hpack_decoder.mojo`; same coverage discipline. |
-| WS frame fuzzing from client. | `fuzz/fuzz_ws_frame.mojo` + the new `fuzz/fuzz_permessage_deflate_context.mojo` (v0.8) cover the wire codec + the LZ77 lifecycle. |
+| WS frame fuzzing from client. | `fuzz/fuzz_ws_frame.mojo` plus `fuzz/fuzz_permessage_deflate_context.mojo` cover the wire codec + the LZ77 lifecycle. |
 | Hostile origin in proxy mode. | flare is not a forward proxy; we do not parse upstream responses as separate requests. If you write a proxy on top of flare, *you* own the response parsing surface. |
 | Untrusted cert (mTLS scenario). | `TlsAcceptor.with_client_cert_verification` enforces a CA bundle; if it isn't set, mTLS is not active and the cert is not consulted. There is no "trust on first use" behaviour. |
 

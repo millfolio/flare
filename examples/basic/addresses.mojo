@@ -3,8 +3,6 @@
 # Demonstrates: IpAddr.parse, SocketAddr, classification methods,
 # and injection-safe address handling.
 #
-# Phase 1 — flare.net (working)
-#
 # Usage:
 # pixi run example-addresses
 

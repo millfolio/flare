@@ -182,8 +182,8 @@ struct Http2ClientConfig(Copyable, Defaultable, Movable):
         allow_huffman_encode: When ``True``, the HPACK encoder
             picks the shorter of raw vs Huffman per emitted
             literal on outbound HEADERS. Defaults to ``False`` --
-            v0.6 H=0-only wire output until peers and soak data
-            confirm interop.
+            H=0-only wire output until peers and soak data confirm
+            interop.
     """
 
     var initial_window_size: Int

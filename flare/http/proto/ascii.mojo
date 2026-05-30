@@ -1,9 +1,8 @@
 """``flare.http.proto.ascii`` -- zero-validation ASCII helpers.
 
-Closes critique register §C4 by promoting ``_ascii_unchecked_string``
-out of :mod:`flare.http.server` (which was the originating site for
-the helper but is the wrong layer -- it's the reactor-coupled
-dispatcher, not the sans-I/O parser surface).
+Promoted out of :mod:`flare.http.server` (which was the originating
+site for the helper but is the wrong layer -- it is the reactor-
+coupled dispatcher, not the sans-I/O parser surface).
 
 Why it lives here
 
@@ -18,9 +17,9 @@ RFC 6455 token / VCHAR / TCHAR check upstream, so the additional
 stdlib UTF-8 validation is dead work.
 
 The helper showed up as the single hottest user-space symbol in
-``perf record`` against the H1 plaintext bench (~5% of CPU). Wider
-adoption past the H1 path is the v0.7 finishing-pass goal; this
-module is the namespace for that promotion.
+``perf record`` against the H1 plaintext bench (~5% of CPU); this
+module is the namespace it lives in so every parser layer can
+reach for it consistently.
 
 Caller contract
 

@@ -53,7 +53,7 @@ Behaviour notes:
 Example:
 
 ```mojo
-from flare.http import Conditional, App, Router, Response, ok
+from flare.http import Conditional, Router, Response, ok
 
 def handler(req: Request) raises -> Response:
     var resp = ok("hello")

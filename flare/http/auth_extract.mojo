@@ -1,6 +1,6 @@
 """Server-side authentication extractors + CSRF helper.
 
-The v0.6 :mod:`flare.http.auth` module ships ``BasicAuth`` and
+The :mod:`flare.http.auth` module ships ``BasicAuth`` and
 ``BearerAuth`` for the **client** side — they apply credentials
 to an outbound request's ``Authorization`` header.
 
@@ -19,16 +19,16 @@ This module provides the symmetric **server-side** primitives:
   for double-submit-cookie CSRF protection (OWASP Cheat Sheet
   §3.1.1, "Double Submit Cookie pattern").
 
-Why server-side parsers, separate from the v0.6 client-side
+Why server-side parsers, separate from the client-side
 applicators:
 
 - An ``HttpServer`` handler that needs to authenticate the
   caller has to *parse* an ``Authorization`` header, not write
   one. The ``BasicAuth.apply`` shape doesn't fit (writes vs
   reads are different operations on the same header name).
-- Symmetry with v0.6 ``Header[T, name]`` extractor pattern:
-  callers who put ``var token: BearerExtract`` on their
-  ``Extracted[H]`` struct get the same auto-injection
+- Symmetry with the existing ``Header[T, name]`` extractor
+  pattern: callers who put ``var token: BearerExtract`` on
+  their ``Extracted[H]`` struct get the same auto-injection
   semantics they get for path / query / header extractors.
 - CSRF lives here because every server-side auth pattern
   needs it (or needs to deliberately opt out of it). Bundling

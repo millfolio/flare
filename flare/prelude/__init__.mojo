@@ -1,15 +1,15 @@
 """``flare.prelude`` — wide-import surface.
 
 This module re-exports **every** stable public symbol from the
-flare submodules. It exists so users that want the v0.7-era
-"everything at the top level" feel can write::
+flare submodules. It exists so users who want the everything-at-
+the-top-level feel can write::
 
     from flare.prelude import *
 
-The root :mod:`flare` package itself was curated in v0.8 down to
-~40 most-used symbols (HttpServer / Router / Request / Response /
-extractors / middleware / TLS / sockets / WsClient / TestClient).
-Everything beyond that core surface lives in an opt-in submodule
+The root :mod:`flare` package itself is curated to ~40 most-used
+symbols (HttpServer / Router / Request / Response / extractors /
+middleware / TLS / sockets / WsClient / TestClient). Everything
+beyond that core surface lives in an opt-in submodule
 (:mod:`flare.http2`, :mod:`flare.quic`, :mod:`flare.h3`,
 :mod:`flare.grpc`, :mod:`flare.runtime`, :mod:`flare.crypto`,
 :mod:`flare.openapi`, :mod:`flare.testing`). The prelude pulls

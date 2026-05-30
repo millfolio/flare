@@ -1,4 +1,4 @@
-"""Example 43: infallible handlers -- bare function vs HandlerInfallible (v0.7).
+"""Example: infallible handlers -- bare function vs HandlerInfallible.
 
 flare accepts three shapes for a "this handler cannot fail" endpoint.
 In rough order of ergonomics (cheapest first):
@@ -24,7 +24,7 @@ In rough order of ergonomics (cheapest first):
    but needs to carry struct fields), implement
    :trait:`HandlerInfallible` -- the no-``raises`` sibling of the
    regular :trait:`Handler` trait. Wrap with :class:`WithRaises` to
-   slot into ``Router`` / ``App`` / middleware that expect the
+   slot into ``Router`` and middleware that expect the
    regular :trait:`Handler`. The ``WithRaises`` adapter is
    zero-overhead at runtime (``@always_inline`` forwards directly
    to the inner ``serve``).

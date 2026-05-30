@@ -32,7 +32,7 @@ error type" guidance.
 3. **Wrap at trait / framework boundaries.** The
    :class:`flare.http.handler.Handler` trait and
    :class:`flare.http.extract.Extractor` trait declare
-   bare ``raises`` for backwards compatibility with the v0.6
+   bare ``raises`` for backwards compatibility with the original
    surface. Impls that need typed errors internally should
    raise typed errors directly from their bare-raises body — the
    Mojo runtime preserves the typed error's identity (its

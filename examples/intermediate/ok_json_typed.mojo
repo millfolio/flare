@@ -1,4 +1,4 @@
-"""Example 42: typed JSON request -> typed JSON response (v0.7).
+"""Example: typed JSON request -> typed JSON response.
 
 The :class:`flare.http.Json[T]` input extractor parses a request
 body into a typed :class:`json.Value`; the symmetric output side is
@@ -6,10 +6,9 @@ body into a typed :class:`json.Value`; the symmetric output side is
 :class:`json.Value` and emits a 200 OK response with
 ``Content-Type: application/json`` and the serialised body.
 
-Closes the input/output asymmetry the v0.7 critique flagged: prior
-to v0.7 the canonical JSON-out path was ``ok_json(string)`` with
-the caller stitching JSON together by hand, while the input side
-already had typed parsing.
+Closes the input/output asymmetry that the prior ``ok_json(string)``
+shape exposed: callers used to stitch JSON together by hand on the
+output side while the input side already had typed parsing.
 
 Run:
     mojo -I . examples/42_ok_json_typed.mojo

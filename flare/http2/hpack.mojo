@@ -14,8 +14,8 @@ This is a complete-but-pragmatic decoder + encoder:
   ``flare.http.hpack_huffman``. ``HpackEncoder`` emits raw
   ``H=0`` literals by default; flipping ``allow_huffman`` makes
   it pick the shorter of raw vs Huffman per literal. The
-  defaults match v0.6 wire behaviour exactly so existing peers
-  keep interoperating.
+  defaults match the legacy wire behaviour exactly so existing
+  peers keep interoperating.
 - ``Indexed Header Field`` (§6.1), ``Literal Header Field with
   Incremental Indexing`` (§6.2.1), ``Literal Header Field without
   Indexing`` (§6.2.2), ``Literal Header Field Never Indexed``
@@ -227,11 +227,11 @@ struct HpackDecoder(Copyable, Defaultable, Movable):
 
     ``allow_huffman`` gates ``H=1`` literal decoding: when ``False``
     (default) the decoder raises on Huffman-coded strings, matching
-    pre-v0.7 behaviour byte-for-byte. When ``True`` the decoder
-    routes ``H=1`` literals through the RFC 7541 Appendix B codec
-    in ``flare.http.hpack_huffman``. ``Http2Config.with_config``
-    plumbs the flag through from user config; tests can flip it
-    directly.
+    the legacy raw-literal-only behaviour byte-for-byte. When
+    ``True`` the decoder routes ``H=1`` literals through the
+    RFC 7541 Appendix B codec in ``flare.http.hpack_huffman``.
+    ``Http2Config.with_config`` plumbs the flag through from user
+    config; tests can flip it directly.
     """
 
     var dynamic: List[HpackHeader]
@@ -394,7 +394,7 @@ struct HpackEncoder(Copyable, Defaultable, Movable):
 
     ``allow_huffman`` gates ``H=1`` literal emission. When
     ``False`` (default) the encoder emits raw ``H=0`` literals,
-    matching pre-v0.7 wire output byte-for-byte. When ``True``
+    matching the legacy wire output byte-for-byte. When ``True``
     each literal is emitted as the shorter of raw vs Huffman
     (the Huffman length is computed first; the raw form wins
     on tie). Since the dynamic table is empty either way, no

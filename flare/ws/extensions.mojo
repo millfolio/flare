@@ -193,7 +193,7 @@ def build_permessage_deflate_offer(cfg: PermessageDeflateConfig) -> String:
     a ``permessage-deflate`` offer.
 
     Always emits ``permessage-deflate`` plus any parameters that
-    differ from the RFC default. v0.7 always offers
+    differ from the RFC default. The offer always carries
     ``client_no_context_takeover`` and
     ``server_no_context_takeover`` so the negotiated mode is
     deterministic.
@@ -228,8 +228,8 @@ def negotiate_permessage_deflate(
     Returns ``None`` if the client offered nothing acceptable or
     the server has the extension disabled. Otherwise returns the
     ``(Sec-WebSocket-Extensions response value, negotiated_cfg)``
-    pair the caller writes into the 101 response. v0.7 always
-    enforces ``no_context_takeover`` on both sides so the
+    pair the caller writes into the 101 response. The negotiator
+    always enforces ``no_context_takeover`` on both sides so the
     response value is fully deterministic regardless of the
     client's offer.
 
@@ -248,8 +248,8 @@ def negotiate_permessage_deflate(
         var negotiated = cfg.copy()
         # Honour the client-bit-set parameters so the response
         # value reflects what was offered (handshake honesty), but
-        # always force both no_context_takeover bits so v0.7's
-        # codec model is in effect.
+        # always force both no_context_takeover bits so the
+        # no-context-takeover codec model is in effect.
         negotiated.client_no_context_takeover = True
         negotiated.server_no_context_takeover = True
         # Cap window bits at the RFC default (we don't do < 15).

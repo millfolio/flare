@@ -4,8 +4,9 @@ Walks through:
 
 1. Building a client-side ``Sec-WebSocket-Extensions`` offer.
 2. Parsing the offer the way a server would.
-3. Negotiating the offer -- v0.7 always locks both sides to
-   ``no_context_takeover`` so the response value is deterministic.
+3. Negotiating the offer -- the negotiator currently always
+   locks both sides to ``no_context_takeover`` so the response
+   value is deterministic.
 4. Compressing a plaintext message with the negotiated config.
 5. Decompressing it back, with the per-message decompressed-size
    cap (default 16 MiB) enforced.

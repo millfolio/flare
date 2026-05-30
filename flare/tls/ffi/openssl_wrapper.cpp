@@ -364,7 +364,7 @@ const char* flare_ssl_last_error(void) {
     return last_error_msg.c_str();
 }
 
-// ── Server-side context lifecycle (v0.5.0 follow-up / Track 5.1 / C6) ─────
+// ── Server-side context lifecycle ─────────────────────────────────────────
 
 flare_ssl_ctx_t flare_ssl_ctx_new_server(
     const char* cert_path, const char* key_path
@@ -637,7 +637,7 @@ flare_test_server_t flare_test_server_new(
     }
 
     /* Enable session tickets on the test server by default so the
-     * v0.7 resumption tests can drive a second handshake against
+     * resumption tests can drive a second handshake against
      * the same ctx and observe SSL_session_reused() == 1. The
      * lifetime is the OpenSSL default (7200s). Production callers
      * use ``flare_ssl_ctx_enable_session_tickets`` on a
@@ -749,7 +749,7 @@ int flare_test_server_echo_n(flare_test_server_t srv_ptr, int n) {
      * write-all-back), this variant does PER-MESSAGE echo so a
      * client can do a connect / write 1 / read 1 / close round
      * trip without deadlocking on a half-closed write-side. The
-     * v0.7 resumption tests rely on the round trip to give the
+     * resumption tests rely on the round trip to give the
      * NewSessionTicket time to arrive at the client. */
     if (!srv_ptr || n <= 0) return -1;
     FlareTestServer* srv = static_cast<FlareTestServer*>(srv_ptr);
@@ -859,7 +859,7 @@ int flare_connect_timeout(int fd, const void* addr, unsigned addrlen,
     return so_err; /* 0 = success, positive errno = error */
 }
 
-/* ── HMAC-SHA256 (v0.6 Track D) ──────────────────────────────────────────── */
+/* ── HMAC-SHA256 ──────────────────────────────────────────────────────────── */
 
 #include <openssl/hmac.h>
 #include <openssl/crypto.h>

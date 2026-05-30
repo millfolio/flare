@@ -119,7 +119,7 @@ int flare_ssl_ctx_enable_session_tickets(flare_ssl_ctx_t ctx, int lifetime_s);
 
 const char* flare_ssl_last_error(void);
 
-/* ── Server-side context lifecycle (v0.5.0 follow-up / Track 5.1 / C6) ─── */
+/* ── Server-side context lifecycle ─────────────────────────────────────── */
 
 /**
  * Create a server-side ``SSL_CTX`` configured with TLS 1.2+,
@@ -221,7 +221,7 @@ flare_ssl_t flare_ssl_new_accept(flare_ssl_ctx_t ctx, int fd);
  */
 int flare_ssl_do_handshake(flare_ssl_t ssl);
 
-/* ── Server-side introspection (v0.5.0 follow-up / Track 5.2) ──────────── */
+/* ── Server-side introspection ─────────────────────────────────────────── */
 
 /**
  * Copy the negotiated ALPN protocol into ``buf``.
@@ -352,13 +352,13 @@ int flare_test_server_echo_once(flare_test_server_t srv);
  * Same per-connection semantics as ``flare_test_server_echo_once``;
  * differs only in that the same ``SSL_CTX`` is reused across all
  * accepts so cached session tickets / IDs survive between
- * connections (the v0.7 resumption tests rely on this).
+ * connections (the resumption tests rely on this).
  *
  * @return 0 on success, -1 on error.
  */
 int flare_test_server_echo_n(flare_test_server_t srv, int n);
 
-/* ── HMAC-SHA256 (v0.6 Track D — signed cookies / sessions) ────────────────── */
+/* ── HMAC-SHA256 (signed cookies / sessions) ─────────────────────────────── */
 
 /**
  * Compute HMAC-SHA256(key, msg) and write the 32-byte tag into out.

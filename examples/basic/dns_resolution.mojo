@@ -3,8 +3,6 @@
 # Demonstrates: resolve(), resolve_v4(), resolve_v6(), numeric IP passthrough,
 # and security guards on hostnames.
 #
-# Phase 2 — flare.dns (working)
-#
 # Usage:
 # pixi run example-dns
 

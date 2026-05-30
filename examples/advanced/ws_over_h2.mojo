@@ -1,6 +1,6 @@
 """WebSocket-over-HTTP/2 (RFC 8441) primitive demo.
 
-Drives the v0.7 stream <-> frame adapter
+Drives the stream <-> frame adapter
 :class:`flare.ws.client_h2.WsOverH2Stream` against a synthetic
 HTTP/2 peer (no socket -- we hand-craft the server's SETTINGS so
 the demo runs without a real h2 backend).
@@ -22,9 +22,9 @@ What the example shows:
 6. Closing the tunnel, which emits a CLOSE WS frame with the h2
    ``END_STREAM`` flag set (RFC 8441 §5.5).
 
-For a real WS-over-h2 deployment the v0.7.x ``WsClient.prefer_h2``
-ALPN dispatch will replace the synthetic peer; the primitive
-surface stays identical.
+For a real WS-over-h2 deployment, ``WsClient.prefer_h2`` ALPN
+dispatch will replace the synthetic peer; the primitive surface
+stays identical.
 """
 
 from flare.http2 import Frame, FrameFlags, FrameType, encode_frame

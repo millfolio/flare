@@ -62,8 +62,8 @@ var compat = _ExperimentalH1LeniencyConfig(
 )
 ```
 
-The full audit + parser plumbing is the v0.9 follow-up; today
-this struct is the public API contract, and
+The full audit + parser plumbing is a follow-up; today this
+struct is the public API contract, and
 ``_ExperimentalH1LeniencyConfig`` is re-exported from
 ``flare.http.proto`` so users can write configuration code
 against the named surface immediately.
@@ -82,7 +82,7 @@ struct _ExperimentalH1LeniencyConfig(Copyable, Movable):
     only ``allow_lf_only_line_endings`` and ``allow_obs_fold``
     drive parser branches through the conformance corpus; the
     rest of the fields are documented contract surface that
-    the v0.9 audit pass will wire end-to-end. Strict mode (the
+    a follow-up audit pass will wire end-to-end. Strict mode (the
     default) is fully wired and remains the production-safe
     pick.
     """

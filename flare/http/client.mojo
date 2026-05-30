@@ -127,10 +127,10 @@ struct HttpClient(Movable):
     var _pool: ClientPool
     """Idle HTTP/1.1 connection pool keyed on ``(scheme, host,
     port)``. ``ClientPool.disabled()`` (the default) keeps the
-    v0.6 close-after-each-request behaviour; calling
+    legacy close-after-each-request behaviour; calling
     :meth:`with_pool` (or
     :meth:`HttpClient.__init__(... pool=...)`) opts in. Only
-    cleartext ``http://`` requests reuse pooled fds in v0.7;
+    cleartext ``http://`` requests reuse pooled fds today;
     ``https://`` always full-handshakes (the TLS-resumption work
     in Commit 04 keeps that handshake cheap)."""
 
@@ -263,7 +263,7 @@ struct HttpClient(Movable):
         Returns the client (move-in / move-out so the call chains
         with the regular ``HttpClient(...)`` constructor). The
         pool is keyed on ``(scheme, host, port)`` and only
-        cleartext ``http://`` requests reuse pooled fds in v0.7
+        cleartext ``http://`` requests reuse pooled fds today
         (TLS pooling lands together with the resumption-aware
         pool key in a follow-up).
 
@@ -677,9 +677,9 @@ struct HttpClient(Movable):
         """
         var u = Url.parse(url)
 
-        # Pooling is enabled only for cleartext h1 in v0.7. The TLS
-        # path always full-handshakes (TLS resumption keeps that
-        # cheap; pool key-with-ALPN lands in a follow-up).
+        # Pooling is enabled only for cleartext h1. The TLS path
+        # always full-handshakes (TLS resumption keeps that cheap;
+        # pool key-with-ALPN lands in a follow-up).
         var pool_enabled = (
             self._pool._addr != 0
             and not u.is_tls()

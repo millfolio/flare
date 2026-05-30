@@ -17,7 +17,7 @@ in place, on a hit it returns the same 29-byte buffer immediately.
 Per-worker, not shared: each reactor worker holds its own ``DateCache``
 in worker-local storage. There is no cross-thread contention, no atomic,
 no mutex. The trade-off is ``num_workers`` formats / s instead of one;
-at the v0.7 worker counts (1–32) that's negligible.
+at typical worker counts (1–32) that's negligible.
 
 Algorithm: branch-free Howard Hinnant ``civil_from_days`` inverse for
 the year/month/day decomposition (same routine

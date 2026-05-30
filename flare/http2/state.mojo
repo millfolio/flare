@@ -200,7 +200,7 @@ struct Connection(Copyable, Defaultable, Movable):
     var initial_window_size: Int
     var max_header_list_size: Int
     """SETTINGS_MAX_HEADER_LIST_SIZE (RFC 9113 §6.5.2). ``0`` means
-    unset / advertise no cap (the RFC default). v0.7 ``Http2Config``
+    unset / advertise no cap (the RFC default). ``Http2Config``
     sets this to 8192 by default; emitted only when ``> 0``."""
 
     var send_window: Int
@@ -266,10 +266,10 @@ struct Connection(Copyable, Defaultable, Movable):
 
         Emits one (id, value) pair for every server SETTING that
         differs from its RFC 9113 / RFC 7541 protocol default. The
-        v0.6 default ``Connection()`` shape (``max_concurrent_streams
+        legacy default ``Connection()`` shape (``max_concurrent_streams
         = 100``, all others at RFC defaults) emits a single
         ``SETTINGS_MAX_CONCURRENT_STREAMS = 100`` pair so the wire
-        bytes stay byte-for-byte identical to the v0.6 driver
+        bytes stay byte-for-byte identical to the original driver
         (``test_preface_only_emits_settings`` still passes
         unchanged). ``H2Connection.with_config(Http2Config(...))``
         with non-default fields adds the corresponding pairs.
