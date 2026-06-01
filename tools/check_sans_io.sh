@@ -43,6 +43,7 @@ SANS_IO_FILES=(
     "flare/http/simd_parsers.mojo"
     "flare/http/hpack_huffman.mojo"
     "flare/http/hpack_huffman_simd.mojo"
+    "flare/http/proto/huffman.mojo"
     "flare/http2/frame.mojo"
     "flare/http2/hpack.mojo"
     "flare/http2/state.mojo"

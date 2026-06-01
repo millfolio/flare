@@ -54,6 +54,9 @@ from flare.http.proto import (
     huffman_decoded_length,
     huffman_encode,
     huffman_encoded_length,
+    huffman_decode_dispatch,
+    huffman_decode_simd,
+    SIMD_HUFFMAN_THRESHOLD_BYTES,
     H2Frame,
     H2FrameFlags,
     H2FrameHeader,
@@ -183,6 +186,38 @@ def test_huffman_codec_smoke() raises:
         assert_equal(decoded[i], plain[i])
 
 
+def test_huffman_dispatch_smoke() raises:
+    # The canonical fast-table dispatcher must produce byte-for-byte
+    # identical output to the scalar codec for an input above the
+    # short-string bypass threshold.
+    var plain = List[UInt8]()
+    for _ in range(SIMD_HUFFMAN_THRESHOLD_BYTES + 8):
+        for b in String("hello").as_bytes():
+            plain.append(b)
+
+    var encoded = List[UInt8]()
+    huffman_encode(plain, encoded)
+
+    var decoded_scalar = List[UInt8]()
+    huffman_decode(Span[UInt8, _](encoded), decoded_scalar)
+
+    var decoded_dispatch = List[UInt8]()
+    huffman_decode_dispatch(
+        Span[UInt8, _](encoded), decoded_dispatch, use_table=True
+    )
+
+    var decoded_simd = List[UInt8]()
+    huffman_decode_simd(Span[UInt8, _](encoded), decoded_simd)
+
+    assert_equal(len(decoded_scalar), len(plain))
+    assert_equal(len(decoded_dispatch), len(plain))
+    assert_equal(len(decoded_simd), len(plain))
+    for i in range(len(plain)):
+        assert_equal(decoded_scalar[i], plain[i])
+        assert_equal(decoded_dispatch[i], plain[i])
+        assert_equal(decoded_simd[i], plain[i])
+
+
 def test_h2_state_smoke() raises:
     # Just instantiate; per-frame state-machine semantics live in
     # ``test_h2_state.mojo``. This is the re-export channel check.
@@ -227,6 +262,7 @@ def main() raises:
     test_standard_header_phf()
     test_intern_method()
     test_huffman_codec_smoke()
+    test_huffman_dispatch_smoke()
     test_h2_state_smoke()
     test_simd_memmem_smoke()
     test_h1_leniency_default_is_strict()

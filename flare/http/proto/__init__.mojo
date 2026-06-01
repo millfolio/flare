@@ -126,11 +126,18 @@ from flare.http.simd_parsers import (
     simd_percent_decode,
 )
 
-# HPACK Huffman codec (RFC 7541 §5.2). Scalar reference and SIMD
-# kernel slot. Pure functions over byte spans.
-from flare.http.hpack_huffman import (
+# HPACK / QPACK Huffman codec (RFC 7541 §5.2 + Appendix B). Single
+# canonical surface re-exported from ``flare.http.proto.huffman``;
+# scalar reference + 256-entry 8-bit fast-table dispatcher today,
+# real PSHUFB/TBL kernel slot reserved on the same symbols once
+# Mojo exposes the byte-shuffle intrinsics. Pure functions over
+# byte spans (no I/O imports anywhere on the path).
+from flare.http.proto.huffman import (
     HuffmanError,
+    SIMD_HUFFMAN_THRESHOLD_BYTES,
     huffman_decode,
+    huffman_decode_dispatch,
+    huffman_decode_simd,
     huffman_decoded_length,
     huffman_encode,
     huffman_encoded_length,
