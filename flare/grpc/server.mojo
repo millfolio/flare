@@ -187,6 +187,61 @@ struct GrpcCallContext(Copyable, Movable):
     var accept_encoding: String
 
 
+# ── Unary handler reply ────────────────────────────────────────────────────
+
+
+@fieldwise_init
+struct GrpcUnaryReply(Copyable, Movable):
+    """Typed return value for a unary gRPC handler.
+
+    Replaces the prior ``Tuple[List[UInt8], GrpcStatus, GrpcMetadata]``
+    so a handler's call site reads as ``return GrpcUnaryReply.ok(body)``
+    or ``return GrpcUnaryReply.err(GrpcStatus.err(...))`` instead of a
+    positional 3-tuple. The :func:`run_unary_call` driver always emits
+    an empty response body for non-OK replies; ``body`` is ignored in
+    that case (the spec carries the status on the trailers, not the
+    payload).
+
+    The two factory methods (:func:`ok` and :func:`err`) handle the
+    metadata-default ergonomics so a handler that does not attach
+    trailing metadata can omit the argument.
+    """
+
+    var body: List[UInt8]
+    var status: GrpcStatus
+    var trailing_metadata: GrpcMetadata
+
+    @staticmethod
+    def ok(
+        var body: List[UInt8],
+        var trailing_metadata: GrpcMetadata = GrpcMetadata(),
+    ) -> Self:
+        """Build an OK reply carrying ``body`` and the (optional)
+        trailing metadata. ``GrpcStatus.ok()`` is filled in for the
+        caller.
+        """
+        return Self(
+            body=body^,
+            status=GrpcStatus.ok(),
+            trailing_metadata=trailing_metadata^,
+        )
+
+    @staticmethod
+    def err(
+        var status: GrpcStatus,
+        var trailing_metadata: GrpcMetadata = GrpcMetadata(),
+    ) -> Self:
+        """Build a non-OK reply carrying ``status`` plus optional
+        trailing metadata. The body is always empty; the trailers
+        carry the status code + message.
+        """
+        return Self(
+            body=List[UInt8](),
+            status=status^,
+            trailing_metadata=trailing_metadata^,
+        )
+
+
 # ── Unary handler trait ────────────────────────────────────────────────────
 
 
@@ -194,18 +249,18 @@ trait GrpcUnary(Movable):
     """Single-method gRPC handler.
 
     The handler receives the decoded request bytes (already
-    LPM-stitched + decompressed) and returns a tuple of the
-    response payload bytes, the call status, and trailing
-    metadata. Returning a non-OK ``GrpcStatus`` causes the
-    adapter to emit an empty response body + the trailers; the
-    response bytes are ignored in that case.
+    LPM-stitched + decompressed) and returns a typed
+    :class:`GrpcUnaryReply` carrying the response body + status +
+    trailing metadata. Returning a non-OK reply causes the adapter
+    to emit an empty response body + the trailers; the response
+    bytes are ignored in that case.
     """
 
     def serve_unary(
         mut self,
         ctx: GrpcCallContext,
         request_bytes: Span[UInt8, _],
-    ) raises -> Tuple[List[UInt8], GrpcStatus, GrpcMetadata]:
+    ) raises -> GrpcUnaryReply:
         ...
 
 
@@ -363,14 +418,14 @@ def run_unary_call[
     """
     var ctx = parse_request_headers(headers)
     var request_bytes = stitch_request_data(request_data)
-    var result = handler.serve_unary(ctx, Span[UInt8, _](request_bytes))
+    var reply = handler.serve_unary(ctx, Span[UInt8, _](request_bytes))
     var response_data = List[UInt8]()
-    var status_copy = result[1].copy()
-    if status_copy.is_ok():
-        response_data = encode_unary_response(result[0])
-    var trailing_metadata_copy = result[2].copy()
+    if reply.status.is_ok():
+        response_data = encode_unary_response(reply.body)
+    var status_copy = reply.status.copy()
+    var trailing_copy = reply.trailing_metadata.copy()
     return GrpcCallOutcome(
         response_data=response_data^,
         status=status_copy^,
-        trailing_metadata=trailing_metadata_copy^,
+        trailing_metadata=trailing_copy^,
     )

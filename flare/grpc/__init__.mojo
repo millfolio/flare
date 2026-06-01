@@ -43,6 +43,9 @@ Public re-exports:
 - :class:`GrpcCallContext`, :class:`GrpcCallOutcome` -- the
   per-call inputs and outputs the server adapter threads
   through the H2 stream.
+- :class:`GrpcUnaryReply` -- typed handler return value with
+  :func:`GrpcUnaryReply.ok` / :func:`GrpcUnaryReply.err`
+  factories that fill in the status + default metadata.
 - :func:`parse_request_headers`, :func:`stitch_request_data`,
   :func:`encode_unary_response`, :func:`run_unary_call` -- the
   sans-I/O building blocks of the unary server adapter (H2
@@ -68,6 +71,7 @@ from .server import (
     GrpcCallOutcome,
     GrpcRequestHeaders,
     GrpcUnary,
+    GrpcUnaryReply,
     encode_unary_response,
     parse_request_headers,
     run_unary_call,

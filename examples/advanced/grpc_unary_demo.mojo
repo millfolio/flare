@@ -42,6 +42,7 @@ from flare.grpc import (
     GrpcRequestHeaders,
     GrpcStatus,
     GrpcUnary,
+    GrpcUnaryReply,
     decode_grpc_message,
     run_unary_call,
 )
@@ -59,23 +60,17 @@ struct EchoHandler(Copyable, GrpcUnary, Movable):
         mut self,
         ctx: GrpcCallContext,
         request_bytes: Span[UInt8, _],
-    ) raises -> Tuple[List[UInt8], GrpcStatus, GrpcMetadata]:
+    ) raises -> GrpcUnaryReply:
         if self.fail:
-            return Tuple[List[UInt8], GrpcStatus, GrpcMetadata](
-                List[UInt8](),
+            return GrpcUnaryReply.err(
                 GrpcStatus.err(
                     GRPC_STATUS_RESOURCE_EXHAUSTED, String("quota exhausted")
-                ),
-                GrpcMetadata(),
+                )
             )
         var echoed = List[UInt8](capacity=len(request_bytes))
         for i in range(len(request_bytes)):
             echoed.append(request_bytes[i])
-        return Tuple[List[UInt8], GrpcStatus, GrpcMetadata](
-            echoed^,
-            GrpcStatus.ok(),
-            GrpcMetadata(),
-        )
+        return GrpcUnaryReply.ok(echoed^)
 
 
 def _hex(bytes: List[UInt8]) -> String:

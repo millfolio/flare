@@ -462,6 +462,7 @@ from ..grpc import (
     GrpcCallOutcome,
     GrpcRequestHeaders,
     GrpcUnary,
+    GrpcUnaryReply,
     encode_unary_response as grpc_encode_unary_response,
     parse_request_headers as grpc_parse_request_headers,
     run_unary_call as grpc_run_unary_call,

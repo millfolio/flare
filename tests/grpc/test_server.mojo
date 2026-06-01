@@ -22,6 +22,7 @@ from flare.grpc import (
     GrpcRequestHeaders,
     GrpcStatus,
     GrpcUnary,
+    GrpcUnaryReply,
     decode_grpc_message,
     encode_grpc_message,
     encode_unary_response,
@@ -63,14 +64,12 @@ struct EchoUnary(GrpcUnary, Movable):
         mut self,
         ctx: GrpcCallContext,
         request_bytes: Span[UInt8, _],
-    ) raises -> Tuple[List[UInt8], GrpcStatus, GrpcMetadata]:
+    ) raises -> GrpcUnaryReply:
         self.seen_path = String(ctx.path)
         var out = List[UInt8]()
         for i in range(len(request_bytes)):
             out.append(request_bytes[i])
-        return Tuple[List[UInt8], GrpcStatus, GrpcMetadata](
-            out^, GrpcStatus.ok(), GrpcMetadata()
-        )
+        return GrpcUnaryReply.ok(out^)
 
 
 @fieldwise_init
@@ -81,12 +80,10 @@ struct ErrorUnary(GrpcUnary, Movable):
         mut self,
         ctx: GrpcCallContext,
         request_bytes: Span[UInt8, _],
-    ) raises -> Tuple[List[UInt8], GrpcStatus, GrpcMetadata]:
+    ) raises -> GrpcUnaryReply:
         self.hit = True
-        return Tuple[List[UInt8], GrpcStatus, GrpcMetadata](
-            List[UInt8](),
-            GrpcStatus.err(GRPC_STATUS_INTERNAL, String("oops")),
-            GrpcMetadata(),
+        return GrpcUnaryReply.err(
+            GrpcStatus.err(GRPC_STATUS_INTERNAL, String("oops"))
         )
 
 
