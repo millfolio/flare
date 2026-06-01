@@ -8,29 +8,36 @@ trailers. The stream's FIN bit closes the request side of the
 exchange.
 
 This module ships the codec-side reader that turns a stream of
-bytes into a typed event sequence:
+bytes into a typed callback sequence on a caller-supplied
+:trait:`H3RequestEventHandler`:
 
-* ``H3RequestEvent.HEADERS`` -- a complete HEADERS frame has been
-  parsed. The decoded :class:`QpackHeader` list is attached.
-* ``H3RequestEvent.DATA``    -- a DATA frame's payload is ready.
-* ``H3RequestEvent.NEEDS_MORE`` -- the buffer does not yet hold a
-  complete next frame; the caller should accumulate more bytes
-  and call again.
-* ``H3RequestEvent.UNKNOWN_FRAME`` -- an unknown / grease frame
-  type was parsed; receivers MUST ignore (RFC 9114 §7.2.8). The
-  reader skips the payload bytes and surfaces the event so the
-  caller can log it.
-* ``H3RequestEvent.PROTOCOL_ERROR`` -- the byte stream is
-  malformed (truncated varint, oversize length, QPACK decode
-  failure, repeated HEADERS); the caller surfaces this as an
-  H3_FRAME_UNEXPECTED / QPACK_DECOMPRESSION_FAILED stream-level
-  error to the QUIC peer.
+* :meth:`H3RequestEventHandler.on_headers`  -- the first HEADERS
+  frame has been parsed and QPACK-decoded.
+* :meth:`H3RequestEventHandler.on_data`     -- a DATA frame's
+  payload is ready.
+* :meth:`H3RequestEventHandler.on_trailers` -- the trailing
+  HEADERS frame closing the request side has been parsed.
+* :meth:`H3RequestEventHandler.on_unknown_frame` -- an unknown /
+  grease frame type was parsed; receivers MUST ignore (RFC 9114
+  §7.2.8). The reader skips the payload bytes and fires the
+  callback so the caller can log it.
+* :meth:`H3RequestEventHandler.on_protocol_error` -- the byte
+  stream is malformed (truncated varint, oversize length, QPACK
+  decode failure, repeated HEADERS); the caller surfaces this as
+  an H3_FRAME_UNEXPECTED / QPACK_DECOMPRESSION_FAILED stream-
+  level error to the QUIC peer.
+
+The dispatcher entry point :func:`feed_into[H]` returns the
+number of bytes consumed. A return of ``0`` means NEEDS_MORE --
+the buffer does not yet hold a complete next frame; the caller
+accumulates more bytes and calls again. The reader fires at most
+one callback per ``feed_into`` invocation.
 
 Sans-I/O contract: the reader holds zero socket / QUIC
 references; it operates on byte spans that the QUIC stream
-reassembly layer hands it. The H3 server reactor wraps this
-in a per-stream loop that calls ``feed`` after every QUIC
-DATA chunk arrival.
+reassembly layer hands it. The H3 server reactor wraps this in a
+per-stream loop that calls ``feed_into`` after every QUIC DATA
+chunk arrival.
 
 References:
 - RFC 9114 §4 (HTTP Message Exchanges) + §7 (Frames).
@@ -55,17 +62,6 @@ from .frame import (
 )
 
 
-# ── Event tags ─────────────────────────────────────────────────────────────
-
-
-comptime H3_REQUEST_EVENT_HEADERS: Int = 0
-comptime H3_REQUEST_EVENT_DATA: Int = 1
-comptime H3_REQUEST_EVENT_NEEDS_MORE: Int = 2
-comptime H3_REQUEST_EVENT_UNKNOWN_FRAME: Int = 3
-comptime H3_REQUEST_EVENT_PROTOCOL_ERROR: Int = 4
-comptime H3_REQUEST_EVENT_TRAILERS: Int = 5
-
-
 # ── State tags ─────────────────────────────────────────────────────────────
 
 
@@ -76,41 +72,60 @@ comptime H3_REQUEST_STATE_BODY: Int = 1
 comptime H3_REQUEST_STATE_TRAILERS: Int = 2
 """Trailers received; the next event must be NEEDS_MORE or
 end-of-stream signalled by the caller. Receiving any further
-frame is a PROTOCOL_ERROR."""
+frame is a protocol error."""
 comptime H3_REQUEST_STATE_DONE: Int = 3
 """Stream is closed; further calls are no-ops."""
 
 
-@fieldwise_init
-struct H3RequestEvent(Copyable, Movable):
-    """Output of one ``feed`` step.
+# ── Event-handler trait ────────────────────────────────────────────────────
 
-    The ``kind`` field is one of the ``H3_REQUEST_EVENT_*``
-    constants. The other fields are populated only on relevant
-    events (``headers`` for HEADERS / TRAILERS, ``data`` for
-    DATA, ``unknown_type`` for UNKNOWN_FRAME, ``error_message``
-    for PROTOCOL_ERROR). The ``consumed`` field reports how many
-    bytes were consumed from the input span -- the caller uses
-    it to advance its own buffer cursor.
+
+trait H3RequestEventHandler(ImplicitlyDestructible, Movable):
+    """Per-event callback contract :func:`feed_into` fires.
+
+    The dispatcher reads one wire frame at the start of the
+    request-stream buffer and invokes exactly one callback per
+    successful parse (HEADERS, DATA, TRAILERS, UNKNOWN_FRAME, or
+    PROTOCOL_ERROR). NEEDS_MORE returns ``0`` without firing any
+    callback -- the caller accumulates more bytes and re-invokes
+    the dispatcher.
+
+    Callbacks own their payload arguments by value so the handler
+    can stash them (e.g. into a per-stream request accumulator)
+    without lifetime gymnastics.
     """
 
-    var kind: Int
-    var headers: List[QpackHeader]
-    var data: List[UInt8]
-    var unknown_type: UInt64
-    var error_message: String
-    var consumed: Int
+    def on_headers(mut self, headers: List[QpackHeader]) raises:
+        """A complete first HEADERS frame has been parsed and
+        QPACK-decoded. The reader's state advances to ``BODY``.
+        """
+        ...
 
+    def on_data(mut self, data: List[UInt8]) raises:
+        """A complete DATA frame has been parsed. ``data`` carries
+        the payload bytes."""
+        ...
 
-def _empty_event(kind: Int, consumed: Int) -> H3RequestEvent:
-    return H3RequestEvent(
-        kind=kind,
-        headers=List[QpackHeader](),
-        data=List[UInt8](),
-        unknown_type=UInt64(0),
-        error_message=String(""),
-        consumed=consumed,
-    )
+    def on_trailers(mut self, trailers: List[QpackHeader]) raises:
+        """A trailing HEADERS frame closing the request side has
+        been parsed. The reader's state advances to ``TRAILERS``.
+        """
+        ...
+
+    def on_unknown_frame(mut self, type_id: UInt64) raises:
+        """An unknown / grease frame type fired. Receivers MUST
+        ignore per RFC 9114 §7.2.8; the reader skips the payload
+        bytes and fires this so the caller may log."""
+        ...
+
+    def on_protocol_error(mut self, message: String) raises:
+        """The byte stream is malformed (truncated varint,
+        oversize length, QPACK decode failure, out-of-order
+        frame). The reader's state has already advanced to
+        ``DONE`` before this fires; the caller surfaces this as
+        a stream-level error to the QUIC peer.
+        """
+        ...
 
 
 # ── Reader ─────────────────────────────────────────────────────────────────
@@ -159,33 +174,35 @@ def _parse_frame_header(
     )
 
 
-def feed(
+def feed_into[
+    H: H3RequestEventHandler
+](
     mut reader: H3RequestReader,
     buf: Span[UInt8, _],
-) raises -> H3RequestEvent:
-    """Try to parse the next H3 frame at the start of ``buf``.
+    mut handler: H,
+) raises -> Int:
+    """Try to parse the next H3 frame at the start of ``buf`` and
+    fire the matching :trait:`H3RequestEventHandler` callback.
 
-    Returns:
-    * ``NEEDS_MORE`` if the buffer is truncated -- the caller
-      accumulates more bytes and re-calls.
-    * ``HEADERS``   on a complete first HEADERS frame; updates
-      the reader's state to ``BODY``.
-    * ``TRAILERS``  on a HEADERS frame received while in
-      ``BODY`` state; updates the reader's state to
-      ``TRAILERS``.
-    * ``DATA``      on a complete DATA frame.
-    * ``UNKNOWN_FRAME`` on any frame whose type is unknown / grease;
-      consumes the frame entirely (RFC 9114 §7.2.8).
-    * ``PROTOCOL_ERROR`` on a malformed or out-of-sequence frame
-      (e.g. DATA before HEADERS, repeated HEADERS in TRAILERS
-      state, oversize HEADERS field section, QPACK decode
-      failure). The reader's state advances to ``DONE`` so
-      further calls are no-ops.
+    Returns the number of bytes consumed:
+
+    * ``0`` -- NEEDS_MORE: the buffer is truncated or the reader
+      is already DONE. No callback fires; the caller accumulates
+      more bytes and re-invokes the dispatcher.
+    * ``> 0`` -- exactly one callback fired
+      (``on_headers`` / ``on_data`` / ``on_trailers`` /
+      ``on_unknown_frame`` / ``on_protocol_error``). The caller
+      advances its cursor by the returned count and re-invokes
+      the dispatcher to drain the remainder.
+
+    Protocol errors advance the reader's state to ``DONE`` before
+    the callback fires; subsequent ``feed_into`` calls return
+    ``0`` and never fire another callback.
     """
     if reader.state == H3_REQUEST_STATE_DONE:
-        return _empty_event(H3_REQUEST_EVENT_NEEDS_MORE, 0)
+        return 0
     if len(buf) == 0:
-        return _empty_event(H3_REQUEST_EVENT_NEEDS_MORE, 0)
+        return 0
 
     # Try to read the frame header without committing to advancing
     # the reader state -- a truncated input must be NEEDS_MORE,
@@ -199,72 +216,54 @@ def feed(
         flen = t[1]
         header_size = t[2]
     except:
-        return _empty_event(H3_REQUEST_EVENT_NEEDS_MORE, 0)
+        return 0
     var total = header_size + Int(flen)
     if total > len(buf):
-        return _empty_event(H3_REQUEST_EVENT_NEEDS_MORE, 0)
+        return 0
 
     # Frame is fully present. Dispatch on type + state.
     if ftype == H3_FRAME_TYPE_HEADERS:
         if reader.state == H3_REQUEST_STATE_TRAILERS:
             reader.state = H3_REQUEST_STATE_DONE
-            var ev = _empty_event(H3_REQUEST_EVENT_PROTOCOL_ERROR, total)
-            ev.error_message = String("h3 reader: HEADERS after trailers")
-            return ev^
+            handler.on_protocol_error(
+                String("h3 reader: HEADERS after trailers")
+            )
+            return total
         if flen > reader.max_field_section_bytes:
             reader.state = H3_REQUEST_STATE_DONE
-            var ev = _empty_event(H3_REQUEST_EVENT_PROTOCOL_ERROR, total)
-            ev.error_message = String(
-                "h3 reader: HEADERS field section above limit"
+            handler.on_protocol_error(
+                String("h3 reader: HEADERS field section above limit")
             )
-            return ev^
+            return total
         var payload = buf[header_size:total]
         var headers: List[QpackHeader]
         try:
             headers = decode_field_section(payload)
         except:
             reader.state = H3_REQUEST_STATE_DONE
-            var ev = _empty_event(H3_REQUEST_EVENT_PROTOCOL_ERROR, total)
-            ev.error_message = String("h3 reader: QPACK decode failed")
-            return ev^
+            handler.on_protocol_error(String("h3 reader: QPACK decode failed"))
+            return total
         if reader.state == H3_REQUEST_STATE_INIT:
             reader.state = H3_REQUEST_STATE_BODY
-            return H3RequestEvent(
-                kind=H3_REQUEST_EVENT_HEADERS,
-                headers=headers^,
-                data=List[UInt8](),
-                unknown_type=UInt64(0),
-                error_message=String(""),
-                consumed=total,
-            )
+            handler.on_headers(headers^)
+            return total
         # In BODY -- this is the trailers frame.
         reader.state = H3_REQUEST_STATE_TRAILERS
-        return H3RequestEvent(
-            kind=H3_REQUEST_EVENT_TRAILERS,
-            headers=headers^,
-            data=List[UInt8](),
-            unknown_type=UInt64(0),
-            error_message=String(""),
-            consumed=total,
-        )
+        handler.on_trailers(headers^)
+        return total
 
     if ftype == H3_FRAME_TYPE_DATA:
         if reader.state != H3_REQUEST_STATE_BODY:
             reader.state = H3_REQUEST_STATE_DONE
-            var ev = _empty_event(H3_REQUEST_EVENT_PROTOCOL_ERROR, total)
-            ev.error_message = String("h3 reader: DATA outside body window")
-            return ev^
+            handler.on_protocol_error(
+                String("h3 reader: DATA outside body window")
+            )
+            return total
         var data = List[UInt8](capacity=Int(flen))
         for i in range(header_size, total):
             data.append(buf[i])
-        return H3RequestEvent(
-            kind=H3_REQUEST_EVENT_DATA,
-            headers=List[QpackHeader](),
-            data=data^,
-            unknown_type=UInt64(0),
-            error_message=String(""),
-            consumed=total,
-        )
+        handler.on_data(data^)
+        return total
 
     # CANCEL_PUSH / SETTINGS / PUSH_PROMISE / GOAWAY / MAX_PUSH_ID
     # are all illegal on a request stream (RFC 9114 §6.2). The
@@ -278,18 +277,11 @@ def feed(
         or ftype == H3_FRAME_TYPE_PUSH_PROMISE
     ):
         reader.state = H3_REQUEST_STATE_DONE
-        var ev = _empty_event(H3_REQUEST_EVENT_PROTOCOL_ERROR, total)
-        ev.error_message = String(
-            "h3 reader: control-stream frame type on request stream"
+        handler.on_protocol_error(
+            String("h3 reader: control-stream frame type on request stream")
         )
-        return ev^
+        return total
 
     # Unknown / grease -- ignore per RFC 9114 §7.2.8.
-    return H3RequestEvent(
-        kind=H3_REQUEST_EVENT_UNKNOWN_FRAME,
-        headers=List[QpackHeader](),
-        data=List[UInt8](),
-        unknown_type=ftype,
-        error_message=String(""),
-        consumed=total,
-    )
+    handler.on_unknown_frame(ftype)
+    return total

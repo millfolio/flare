@@ -8,8 +8,10 @@ opening a QUIC stream. It exercises:
 * :mod:`flare.h3.frame` -- the RFC 9114 §7 frame codec
   (``encode_h3_frame`` + the ``H3_FRAME_TYPE_*`` tags).
 * :mod:`flare.h3.request_reader` -- the sans-I/O state machine
-  that turns request-stream bytes back into typed events
-  (HEADERS / DATA / TRAILERS).
+  that turns request-stream bytes back into typed callback
+  dispatches on a caller-supplied
+  :trait:`H3RequestEventHandler` (``on_headers`` /
+  ``on_data`` / ``on_trailers``).
 * :mod:`flare.h3.response_writer` -- the symmetric writer that
   serialises a status + headers + body + trailers into the
   wire bytes a QUIC stream send would carry.
@@ -20,8 +22,8 @@ The walk is::
     |  client  |--------------------------------------+
     +----------+                                      |
                                                       v
-    +----------+ <--- feed() <--- H3RequestReader <-+ wire bytes
-    | reader   |
+    +----------+ <-- feed_into() <-- H3RequestReader -+ wire bytes
+    | reader   |                                         + handler
     +----------+
 
 then::
@@ -45,17 +47,14 @@ from std.memory import Span
 from flare.h3 import (
     H3_FRAME_TYPE_DATA,
     H3_FRAME_TYPE_HEADERS,
-    H3_REQUEST_EVENT_DATA,
-    H3_REQUEST_EVENT_HEADERS,
-    H3_REQUEST_EVENT_NEEDS_MORE,
-    H3_REQUEST_EVENT_TRAILERS,
+    H3RequestEventHandler,
     H3RequestReader,
     decode_h3_frame,
     encode_h3_frame,
     encode_response_data,
     encode_response_headers,
     encode_response_trailers,
-    feed,
+    feed_into,
 )
 from flare.quic import decode_varint
 from flare.qpack import (
@@ -65,16 +64,48 @@ from flare.qpack import (
 )
 
 
-def _event_name(kind: Int) -> String:
-    if kind == H3_REQUEST_EVENT_HEADERS:
-        return String("HEADERS")
-    if kind == H3_REQUEST_EVENT_DATA:
-        return String("DATA")
-    if kind == H3_REQUEST_EVENT_TRAILERS:
-        return String("TRAILERS")
-    if kind == H3_REQUEST_EVENT_NEEDS_MORE:
-        return String("NEEDS_MORE")
-    return String("OTHER(" + String(kind) + ")")
+# Demo-only handler that prints each dispatched callback. A
+# production handler would forward fields into an application
+# request type and stream body bytes into the handler pipeline.
+@fieldwise_init
+struct _DemoHandler(H3RequestEventHandler, Movable):
+    def on_headers(mut self, headers: List[QpackHeader]) raises:
+        print(
+            "   HEADERS",
+            "fields=" + String(len(headers)),
+        )
+        for i in range(len(headers)):
+            print(
+                "      ",
+                String(headers[i].name),
+                "=",
+                String(headers[i].value),
+            )
+
+    def on_data(mut self, data: List[UInt8]) raises:
+        print(
+            "   DATA",
+            "bytes=" + String(len(data)),
+        )
+
+    def on_trailers(mut self, trailers: List[QpackHeader]) raises:
+        print(
+            "   TRAILERS",
+            "fields=" + String(len(trailers)),
+        )
+        for i in range(len(trailers)):
+            print(
+                "      ",
+                String(trailers[i].name),
+                "=",
+                String(trailers[i].value),
+            )
+
+    def on_unknown_frame(mut self, type_id: UInt64) raises:
+        print("   UNKNOWN_FRAME type=" + String(Int(type_id)))
+
+    def on_protocol_error(mut self, message: String) raises:
+        print("   PROTOCOL_ERROR", message)
 
 
 def _build_request_bytes() raises -> List[UInt8]:
@@ -113,47 +144,23 @@ def _build_request_bytes() raises -> List[UInt8]:
 
 def _drain_reader(wire: List[UInt8]) raises:
     """Feed the wire buffer into the reader until the stream is
-    fully consumed, printing each emitted event.
+    fully consumed; the demo handler prints each callback as it
+    fires.
     """
     var reader = H3RequestReader.new()
+    var handler = _DemoHandler()
     var offset = 0
     var loops = 0
     while offset < len(wire) and loops < 16:
         loops += 1
         var rest = Span[UInt8, _](wire)[offset:]
-        var event = feed(reader, rest)
-        if event.kind == H3_REQUEST_EVENT_HEADERS or (
-            event.kind == H3_REQUEST_EVENT_TRAILERS
-        ):
-            print(
-                "  ",
-                _event_name(event.kind),
-                "consumed=" + String(event.consumed),
-                "fields=" + String(len(event.headers)),
-            )
-            for i in range(len(event.headers)):
-                print(
-                    "      ",
-                    String(event.headers[i].name),
-                    "=",
-                    String(event.headers[i].value),
-                )
-        elif event.kind == H3_REQUEST_EVENT_DATA:
-            print(
-                "  ",
-                _event_name(event.kind),
-                "consumed=" + String(event.consumed),
-                "bytes=" + String(len(event.data)),
-            )
-        else:
-            print(
-                "  ",
-                _event_name(event.kind),
-                "consumed=" + String(event.consumed),
-            )
-            if event.consumed == 0:
-                break
-        offset += event.consumed
+        var consumed = feed_into(reader, rest, handler)
+        # consumed == 0 means NEEDS_MORE / DONE: bail out so the
+        # demo doesn't spin forever on a malformed slice.
+        if consumed == 0:
+            print("   NEEDS_MORE (or DONE)")
+            break
+        offset += consumed
 
 
 def _build_response_bytes() raises -> List[UInt8]:

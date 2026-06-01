@@ -12,26 +12,68 @@ from std.memory import Span
 from std.testing import assert_equal, assert_true
 
 from flare.h3 import (
-    H3_REQUEST_EVENT_DATA,
-    H3_REQUEST_EVENT_HEADERS,
-    H3_REQUEST_EVENT_TRAILERS,
+    H3RequestEventHandler,
     H3RequestReader,
     encode_response_data,
     encode_response_headers,
     encode_response_trailers,
-    feed,
+    feed_into,
 )
 from flare.qpack import QpackHeader
+
+
+# Local recorder mirroring the one in test_request_reader.mojo so
+# this test stays standalone.
+@fieldwise_init
+struct _Recorder(H3RequestEventHandler, Movable):
+    var headers_count: Int
+    var trailers_count: Int
+    var data_count: Int
+    var error_count: Int
+    var last_headers: List[QpackHeader]
+    var last_trailers: List[QpackHeader]
+    var last_data: List[UInt8]
+
+    @staticmethod
+    def new() -> Self:
+        return Self(
+            headers_count=0,
+            trailers_count=0,
+            data_count=0,
+            error_count=0,
+            last_headers=List[QpackHeader](),
+            last_trailers=List[QpackHeader](),
+            last_data=List[UInt8](),
+        )
+
+    def on_headers(mut self, headers: List[QpackHeader]) raises:
+        self.headers_count += 1
+        self.last_headers = headers.copy()
+
+    def on_data(mut self, data: List[UInt8]) raises:
+        self.data_count += 1
+        self.last_data = data.copy()
+
+    def on_trailers(mut self, trailers: List[QpackHeader]) raises:
+        self.trailers_count += 1
+        self.last_trailers = trailers.copy()
+
+    def on_unknown_frame(mut self, type_id: UInt64) raises:
+        pass
+
+    def on_protocol_error(mut self, message: String) raises:
+        self.error_count += 1
 
 
 def test_status_only() raises:
     var bytes = encode_response_headers(200, List[QpackHeader]())
     var r = H3RequestReader.new()
-    var ev = feed(r, Span[UInt8, _](bytes))
-    assert_equal(ev.kind, H3_REQUEST_EVENT_HEADERS)
+    var rec = _Recorder.new()
+    var _ = feed_into(r, Span[UInt8, _](bytes), rec)
+    assert_equal(rec.headers_count, 1)
     # Pseudo-header :status MUST be present.
-    assert_equal(ev.headers[0].name, ":status")
-    assert_equal(ev.headers[0].value, "200")
+    assert_equal(rec.last_headers[0].name, ":status")
+    assert_equal(rec.last_headers[0].value, "200")
 
 
 def test_status_with_application_headers() raises:
@@ -40,17 +82,18 @@ def test_status_with_application_headers() raises:
     hs.append(QpackHeader("X-Trace-ID", "abc"))
     var bytes = encode_response_headers(200, hs)
     var r = H3RequestReader.new()
-    var ev = feed(r, Span[UInt8, _](bytes))
-    assert_equal(ev.kind, H3_REQUEST_EVENT_HEADERS)
+    var rec = _Recorder.new()
+    var _ = feed_into(r, Span[UInt8, _](bytes), rec)
+    assert_equal(rec.headers_count, 1)
     # Headers come back lowercased per RFC 9114 §4.2 lowercase
     # mandate -- the writer normalises before QPACK encoding.
     var found_ct = False
     var found_trace = False
-    for i in range(len(ev.headers)):
-        if ev.headers[i].name == "content-type":
+    for i in range(len(rec.last_headers)):
+        if rec.last_headers[i].name == "content-type":
             found_ct = True
-            assert_equal(ev.headers[i].value, "application/json")
-        if ev.headers[i].name == "x-trace-id":
+            assert_equal(rec.last_headers[i].value, "application/json")
+        if rec.last_headers[i].name == "x-trace-id":
             found_trace = True
     assert_true(found_ct)
     assert_true(found_trace)
@@ -88,15 +131,16 @@ def test_data_frame_round_trip() raises:
     for i in range(len(dbytes)):
         stream.append(dbytes[i])
     var r = H3RequestReader.new()
-    var ev1 = feed(r, Span[UInt8, _](stream))
-    assert_equal(ev1.kind, H3_REQUEST_EVENT_HEADERS)
+    var rec = _Recorder.new()
+    var consumed1 = feed_into(r, Span[UInt8, _](stream), rec)
+    assert_equal(rec.headers_count, 1)
     var rest = List[UInt8]()
-    for i in range(ev1.consumed, len(stream)):
+    for i in range(consumed1, len(stream)):
         rest.append(stream[i])
-    var ev2 = feed(r, Span[UInt8, _](rest))
-    assert_equal(ev2.kind, H3_REQUEST_EVENT_DATA)
-    assert_equal(len(ev2.data), 5)
-    assert_equal(ev2.data[0], UInt8(ord("h")))
+    var _ = feed_into(r, Span[UInt8, _](rest), rec)
+    assert_equal(rec.data_count, 1)
+    assert_equal(len(rec.last_data), 5)
+    assert_equal(rec.last_data[0], UInt8(ord("h")))
 
 
 def test_trailers_round_trip() raises:
@@ -115,19 +159,20 @@ def test_trailers_round_trip() raises:
     for i in range(len(tbytes)):
         stream.append(tbytes[i])
     var r = H3RequestReader.new()
-    var ev1 = feed(r, Span[UInt8, _](stream))
+    var rec = _Recorder.new()
+    var consumed1 = feed_into(r, Span[UInt8, _](stream), rec)
     var rest1 = List[UInt8]()
-    for i in range(ev1.consumed, len(stream)):
+    for i in range(consumed1, len(stream)):
         rest1.append(stream[i])
-    var ev2 = feed(r, Span[UInt8, _](rest1))
+    var consumed2 = feed_into(r, Span[UInt8, _](rest1), rec)
     var rest2 = List[UInt8]()
-    for i in range(ev2.consumed, len(rest1)):
+    for i in range(consumed2, len(rest1)):
         rest2.append(rest1[i])
-    var ev3 = feed(r, Span[UInt8, _](rest2))
-    assert_equal(ev3.kind, H3_REQUEST_EVENT_TRAILERS)
-    assert_equal(len(ev3.headers), 1)
-    assert_equal(ev3.headers[0].name, "x-sum")
-    assert_equal(ev3.headers[0].value, "deadbeef")
+    var _ = feed_into(r, Span[UInt8, _](rest2), rec)
+    assert_equal(rec.trailers_count, 1)
+    assert_equal(len(rec.last_trailers), 1)
+    assert_equal(rec.last_trailers[0].name, "x-sum")
+    assert_equal(rec.last_trailers[0].value, "deadbeef")
 
 
 def test_pseudo_header_in_trailers_raises() raises:

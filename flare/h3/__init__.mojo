@@ -19,13 +19,13 @@ Public re-exports:
 - :func:`decode_h3_settings`, :func:`encode_h3_settings` — the
   HTTP/3 SETTINGS frame payload codec (a list of ``identifier:
   value`` varint pairs, RFC 9114 §7.2.4).
-- :class:`H3RequestReader` + :func:`feed` — sans-I/O state
-  machine that consumes the request-stream byte stream and
-  emits :class:`H3RequestEvent` values (HEADERS, DATA,
-  TRAILERS, UNKNOWN_FRAME, NEEDS_MORE, PROTOCOL_ERROR) per
-  RFC 9114 §4. The ``H3_REQUEST_EVENT_*`` /
-  ``H3_REQUEST_STATE_*`` constants enumerate the event tags
-  and state tags.
+- :class:`H3RequestReader` + :trait:`H3RequestEventHandler` +
+  :func:`feed_into[H]` — sans-I/O state machine that consumes
+  the request-stream byte stream and fires typed callbacks
+  (``on_headers`` / ``on_data`` / ``on_trailers`` /
+  ``on_unknown_frame`` / ``on_protocol_error``) per RFC 9114
+  §4. The ``H3_REQUEST_STATE_*`` constants enumerate the
+  reader's lifecycle states.
 - :func:`encode_response_headers`, :func:`encode_response_data`,
   :func:`encode_response_trailers` — sans-I/O response-stream
   writer that emits the corresponding HTTP/3 frames (HEADERS,
@@ -55,19 +55,13 @@ from .frame import (
     encode_h3_settings,
 )
 from .request_reader import (
-    H3_REQUEST_EVENT_DATA,
-    H3_REQUEST_EVENT_HEADERS,
-    H3_REQUEST_EVENT_NEEDS_MORE,
-    H3_REQUEST_EVENT_PROTOCOL_ERROR,
-    H3_REQUEST_EVENT_TRAILERS,
-    H3_REQUEST_EVENT_UNKNOWN_FRAME,
     H3_REQUEST_STATE_BODY,
     H3_REQUEST_STATE_DONE,
     H3_REQUEST_STATE_INIT,
     H3_REQUEST_STATE_TRAILERS,
-    H3RequestEvent,
+    H3RequestEventHandler,
     H3RequestReader,
-    feed,
+    feed_into,
 )
 from .response_writer import (
     encode_response_data,
