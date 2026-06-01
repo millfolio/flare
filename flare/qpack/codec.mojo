@@ -110,8 +110,15 @@ def _encode_string_literal(
 
 def encode_field_section(
     headers: List[QpackHeader],
-) raises -> List[UInt8]:
-    """Encode ``headers`` as a QPACK field section.
+    mut out: List[UInt8],
+) raises:
+    """Append the QPACK-encoded field section bytes (RFC 9204 §4.5) to ``out``.
+
+    The caller owns the buffer and may pass the same
+    ``List[UInt8]`` through repeated encode calls, clearing
+    between calls so the underlying allocation amortises across
+    the stream. The encoder appends only; it never reads from or
+    truncates the existing contents.
 
     The static-only codec emits:
 
@@ -131,7 +138,6 @@ def encode_field_section(
     the call site. The decoder mirrors this -- it surfaces the
     bytes verbatim.
     """
-    var out = List[UInt8]()
     # Field section prefix: required_insert_count = 0 + Base = 0.
     # 8-bit prefix integer for required_insert_count == 0; the
     # short form is a single 0x00 byte.
@@ -164,7 +170,6 @@ def encode_field_section(
         # Huffman flag occupies the next bit (0x08 = 1 << 3).
         _encode_string_literal(out, h.name, UInt8(0x20), 3, UInt8(0x08))
         _encode_string_literal(out, h.value, UInt8(0x00), 7, UInt8(0x80))
-    return out^
 
 
 # ── Decoder ────────────────────────────────────────────────────────────────

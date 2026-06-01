@@ -396,15 +396,22 @@ def stitch_request_data(
 
 def encode_unary_response(
     response_bytes: List[UInt8],
-) raises -> List[UInt8]:
-    """Wrap ``response_bytes`` in a single uncompressed LPM frame.
+    mut out: List[UInt8],
+) raises:
+    """Append a single uncompressed LPM frame wrapping
+    ``response_bytes`` to ``out``.
 
     The encoder always emits flag=0 (no message-level
     compression). Compression negotiation lives at the channel
     level (``grpc-encoding`` / ``grpc-accept-encoding``) and is
     a follow-up line item alongside the decompression path.
+
+    The caller owns the buffer and may reuse the same
+    ``List[UInt8]`` across responses so the underlying
+    allocation amortises across the stream. The encoder appends
+    only; it never reads from or truncates the existing contents.
     """
-    return encode_grpc_message(Span[UInt8, _](response_bytes), compressed=False)
+    encode_grpc_message(Span[UInt8, _](response_bytes), out, compressed=False)
 
 
 def emit_trailing_headers_status(
@@ -460,7 +467,7 @@ def _outcome_from_reply(var reply: GrpcUnaryReply) -> GrpcCallOutcome:
     var status = reply.status.copy()
     if status.is_ok():
         try:
-            response_data = encode_unary_response(reply.body)
+            encode_unary_response(reply.body, response_data)
         except:
             response_data = List[UInt8]()
             status = GrpcStatus.err(

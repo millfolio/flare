@@ -88,18 +88,27 @@ struct GrpcDecodeResult(Copyable, Movable):
 
 
 def encode_grpc_message(
-    payload: Span[UInt8, _], compressed: Bool = False
-) raises -> List[UInt8]:
-    """Encode an LPM frame.
+    payload: Span[UInt8, _],
+    mut out: List[UInt8],
+    compressed: Bool = False,
+) raises:
+    """Append a length-prefix-message (LPM) frame to ``out``.
 
-    Caller is responsible for compressing the payload before
-    calling this function if ``compressed=True``; the framer just
-    sets the flag byte and prefixes the length.
+    The frame is a single byte compression flag plus a 4-byte
+    big-endian length plus the payload bytes. The caller is
+    responsible for compressing the payload before calling this
+    function if ``compressed=True``; the framer just sets the
+    flag byte and prefixes the length.
+
+    The caller owns the buffer and may reuse the same
+    ``List[UInt8]`` across calls so the underlying allocation
+    amortises across the stream. The encoder appends only; it
+    never reads from or truncates the existing contents.
     """
     var n = len(payload)
     if n > 0xFFFFFFFF:
         raise Error("grpc framing: payload exceeds 2^32 - 1 bytes")
-    var out = List[UInt8](capacity=5 + n)
+    out.reserve(len(out) + 5 + n)
     out.append(UInt8(0x01) if compressed else UInt8(0x00))
     # Length: 4 bytes, big-endian.
     out.append(UInt8((n >> 24) & 0xFF))
@@ -108,7 +117,6 @@ def encode_grpc_message(
     out.append(UInt8(n & 0xFF))
     for i in range(n):
         out.append(payload[i])
-    return out^
 
 
 def decode_grpc_message(buf: Span[UInt8, _]) raises -> GrpcDecodeResult:

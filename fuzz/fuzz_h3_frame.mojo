@@ -151,7 +151,8 @@ def target(data: List[UInt8]) raises:
         var payload = List[UInt8](capacity=payload_len)
         for i in range(payload_len):
             payload.append(data[2 + i])
-        var encoded = encode_h3_frame(frame_type, Span[UInt8, _](payload))
+        var encoded = List[UInt8]()
+        encode_h3_frame(frame_type, Span[UInt8, _](payload), encoded)
         var parsed = decode_h3_frame(Span[UInt8, _](encoded))
         _assert(
             parsed.frame_type.raw == frame_type,
@@ -190,7 +191,8 @@ def target(data: List[UInt8]) raises:
             ident = ident & UInt64(VARINT_MAX)
             value = value & UInt64(VARINT_MAX)
             pairs.append(H3Setting(identifier=ident, value=value))
-        var payload = encode_h3_settings(pairs)
+        var payload = List[UInt8]()
+        encode_h3_settings(pairs, payload)
         var decoded = decode_h3_settings(Span[UInt8, _](payload))
         _assert(
             len(decoded) == pair_count,

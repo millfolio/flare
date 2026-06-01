@@ -51,8 +51,9 @@ from .frame import H3_FRAME_TYPE_DATA, H3_FRAME_TYPE_HEADERS, encode_h3_frame
 def encode_response_headers(
     status: Int,
     headers: List[QpackHeader],
-) raises -> List[UInt8]:
-    """Build the HEADERS-frame bytes for an HTTP/3 response.
+    mut out: List[UInt8],
+) raises:
+    """Append the HEADERS-frame bytes for an HTTP/3 response to ``out``.
 
     Emits ``:status`` as the first field per RFC 9114 §4.3.2,
     then the supplied application headers (all names lowercased).
@@ -60,6 +61,12 @@ def encode_response_headers(
     the reader rejects field sections that emit pseudo-headers
     after a regular header (RFC 9114 §4.3 invariant), and this
     writer skips application-pseudoheader emission entirely.
+
+    The caller owns the buffer and may reuse the same
+    ``List[UInt8]`` across HEADERS + DATA + trailers so the
+    underlying allocation amortises across the response. The
+    encoder appends only; it never reads from or truncates the
+    existing contents.
     """
     if status < 100 or status > 599:
         raise Error("h3 writer: invalid HTTP status " + String(status))
@@ -76,31 +83,44 @@ def encode_response_headers(
                 + "' not allowed in application headers"
             )
         emit.append(QpackHeader(name^, String(headers[i].value)))
-    var qpack_payload = encode_field_section(emit)
-    return encode_h3_frame(H3_FRAME_TYPE_HEADERS, Span[UInt8, _](qpack_payload))
+    var qpack_payload = List[UInt8]()
+    encode_field_section(emit, qpack_payload)
+    encode_h3_frame(H3_FRAME_TYPE_HEADERS, Span[UInt8, _](qpack_payload), out)
 
 
-def encode_response_data(payload: Span[UInt8, _]) raises -> List[UInt8]:
-    """Wrap ``payload`` in an HTTP/3 DATA frame.
+def encode_response_data(
+    payload: Span[UInt8, _],
+    mut out: List[UInt8],
+) raises:
+    """Append an HTTP/3 DATA frame wrapping ``payload`` to ``out``.
 
     The H3 server reactor calls this once per body chunk so
     flow-control back-pressure on the QUIC stream applies per
     chunk; emitting the entire body in one DATA frame is legal
     but loses the granularity. Empty payloads are legal and
     encode as a 2-byte frame (type=0x00 + length=0x00).
+
+    The caller owns the buffer and may reuse the same
+    ``List[UInt8]`` across HEADERS + DATA + trailers so the
+    underlying allocation amortises across the response.
     """
-    return encode_h3_frame(H3_FRAME_TYPE_DATA, payload)
+    encode_h3_frame(H3_FRAME_TYPE_DATA, payload, out)
 
 
 def encode_response_trailers(
     trailers: List[QpackHeader],
-) raises -> List[UInt8]:
-    """Build the trailing HEADERS-frame bytes.
+    mut out: List[UInt8],
+) raises:
+    """Append the trailing HEADERS-frame bytes to ``out``.
 
     Trailers MUST NOT include pseudo-headers; the writer rejects
     any field whose name starts with ``:``. The reactor sends
     this frame followed by FIN to close the response side of the
     request stream.
+
+    The caller owns the buffer and may reuse the same
+    ``List[UInt8]`` across HEADERS + DATA + trailers so the
+    underlying allocation amortises across the response.
     """
     var emit = List[QpackHeader]()
     for i in range(len(trailers)):
@@ -112,5 +132,6 @@ def encode_response_trailers(
                 + "' not allowed in trailers"
             )
         emit.append(QpackHeader(name^, String(trailers[i].value)))
-    var qpack_payload = encode_field_section(emit)
-    return encode_h3_frame(H3_FRAME_TYPE_HEADERS, Span[UInt8, _](qpack_payload))
+    var qpack_payload = List[UInt8]()
+    encode_field_section(emit, qpack_payload)
+    encode_h3_frame(H3_FRAME_TYPE_HEADERS, Span[UInt8, _](qpack_payload), out)

@@ -60,7 +60,8 @@ def target(data: List[UInt8]) raises:
     var headers = headers_opt.value().copy()
     # Round trip: re-encode + re-decode must produce the same
     # header list.
-    var encoded = encode_field_section(headers)
+    var encoded = List[UInt8]()
+    encode_field_section(headers, encoded)
     var headers2 = decode_field_section(Span[UInt8, _](encoded))
     _assert(
         len(headers2) == len(headers),

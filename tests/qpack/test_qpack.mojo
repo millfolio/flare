@@ -67,7 +67,8 @@ def test_round_trip_full_static_match() raises:
     headers.append(QpackHeader(":method", "GET"))
     headers.append(QpackHeader(":scheme", "https"))
     headers.append(QpackHeader(":status", "200"))
-    var encoded = encode_field_section(headers)
+    var encoded = List[UInt8]()
+    encode_field_section(headers, encoded)
     # Prefix: 0x00 0x00 (RIC=0, Base=0).
     assert_equal(Int(encoded[0]), 0x00)
     assert_equal(Int(encoded[1]), 0x00)
@@ -89,7 +90,8 @@ def test_round_trip_full_static_match() raises:
 def test_round_trip_literal_with_name_reference() raises:
     var headers = List[QpackHeader]()
     headers.append(QpackHeader(":path", "/api/users"))
-    var encoded = encode_field_section(headers)
+    var encoded = List[UInt8]()
+    encode_field_section(headers, encoded)
     var decoded = decode_field_section(Span[UInt8, _](encoded))
     assert_equal(len(decoded), 1)
     assert_equal(decoded[0].name, ":path")
@@ -99,7 +101,8 @@ def test_round_trip_literal_with_name_reference() raises:
 def test_round_trip_literal_with_literal_name() raises:
     var headers = List[QpackHeader]()
     headers.append(QpackHeader("x-custom", "value"))
-    var encoded = encode_field_section(headers)
+    var encoded = List[UInt8]()
+    encode_field_section(headers, encoded)
     var decoded = decode_field_section(Span[UInt8, _](encoded))
     assert_equal(len(decoded), 1)
     assert_equal(decoded[0].name, "x-custom")
@@ -112,7 +115,8 @@ def test_round_trip_mixed_field_lines() raises:
     headers.append(QpackHeader(":path", "/login"))
     headers.append(QpackHeader("x-trace-id", "abc-123"))
     headers.append(QpackHeader("content-type", "application/json"))
-    var encoded = encode_field_section(headers)
+    var encoded = List[UInt8]()
+    encode_field_section(headers, encoded)
     var decoded = decode_field_section(Span[UInt8, _](encoded))
     assert_equal(len(decoded), 4)
     for i in range(4):
@@ -158,7 +162,8 @@ def test_round_trip_long_value_uses_huffman_when_shorter() raises:
     # the encoder picks the Huffman path.
     var headers = List[QpackHeader]()
     headers.append(QpackHeader("x-long", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
-    var encoded = encode_field_section(headers)
+    var encoded = List[UInt8]()
+    encode_field_section(headers, encoded)
     var decoded = decode_field_section(Span[UInt8, _](encoded))
     assert_equal(decoded[0].value, headers[0].value)
 

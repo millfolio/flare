@@ -44,7 +44,8 @@ def test_data_frame_round_trip() raises:
     """The canonical DATA frame: type=0x00, length=5, payload
     "hello". Encoded form is ``00 05 68 65 6c 6c 6f``."""
     var payload = _bytes(0x68, 0x65, 0x6C, 0x6C, 0x6F)
-    var enc = encode_h3_frame(H3_FRAME_TYPE_DATA, Span[UInt8](payload))
+    var enc = List[UInt8]()
+    encode_h3_frame(H3_FRAME_TYPE_DATA, Span[UInt8](payload), enc)
     assert_equal(len(enc), 7)
     assert_equal(Int(enc[0]), 0x00)
     assert_equal(Int(enc[1]), 0x05)
@@ -59,7 +60,8 @@ def test_headers_frame_round_trip() raises:
     """HEADERS frame type=0x01. Payload is opaque to the frame
     codec (QPACK-encoded; QPACK is a separate codec module)."""
     var payload = _bytes(0xC0, 0xC1, 0xC2)  # placeholder QPACK bytes
-    var enc = encode_h3_frame(H3_FRAME_TYPE_HEADERS, Span[UInt8](payload))
+    var enc = List[UInt8]()
+    encode_h3_frame(H3_FRAME_TYPE_HEADERS, Span[UInt8](payload), enc)
     var dec = decode_h3_frame(Span[UInt8](enc))
     assert_equal(dec.frame_type.raw, H3_FRAME_TYPE_HEADERS)
     assert_equal(len(dec.payload), 3)
@@ -87,7 +89,8 @@ def test_settings_frame_payload_round_trip() raises:
             value=UInt64(0),
         )
     )
-    var payload = encode_h3_settings(settings)
+    var payload = List[UInt8]()
+    encode_h3_settings(settings, payload)
     var decoded = decode_h3_settings(Span[UInt8](payload))
     assert_equal(len(decoded), 3)
     assert_equal(decoded[0].identifier, H3_SETTINGS_QPACK_MAX_TABLE_CAPACITY)
@@ -108,8 +111,10 @@ def test_settings_frame_complete_wrap() raises:
             value=UInt64(1024),
         )
     )
-    var payload = encode_h3_settings(settings)
-    var enc = encode_h3_frame(H3_FRAME_TYPE_SETTINGS, Span[UInt8](payload))
+    var payload = List[UInt8]()
+    encode_h3_settings(settings, payload)
+    var enc = List[UInt8]()
+    encode_h3_frame(H3_FRAME_TYPE_SETTINGS, Span[UInt8](payload), enc)
     var dec = decode_h3_frame(Span[UInt8](enc))
     assert_equal(dec.frame_type.raw, H3_FRAME_TYPE_SETTINGS)
     var pairs = decode_h3_settings(Span[UInt8](dec.payload))
@@ -121,7 +126,8 @@ def test_empty_payload_round_trip() raises:
     """A frame with a zero-length payload is legal (e.g. an
     empty DATA frame trailer)."""
     var empty = List[UInt8]()
-    var enc = encode_h3_frame(H3_FRAME_TYPE_DATA, Span[UInt8](empty))
+    var enc = List[UInt8]()
+    encode_h3_frame(H3_FRAME_TYPE_DATA, Span[UInt8](empty), enc)
     assert_equal(len(enc), 2)  # type + length, no payload
     assert_equal(Int(enc[0]), 0x00)
     assert_equal(Int(enc[1]), 0x00)
@@ -135,7 +141,8 @@ def test_unknown_frame_type_accepted() raises:
     frame types. The codec surfaces them as ``H3Frame`` with
     ``frame_type.is_known() == False``."""
     var payload = _bytes(0xAA)
-    var enc = encode_h3_frame(UInt64(0x42), Span[UInt8](payload))
+    var enc = List[UInt8]()
+    encode_h3_frame(UInt64(0x42), Span[UInt8](payload), enc)
     var dec = decode_h3_frame(Span[UInt8](enc))
     assert_equal(dec.frame_type.raw, UInt64(0x42))
     assert_false(dec.frame_type.is_known())

@@ -19,11 +19,12 @@ Properties checked:
    declared length matches the actual payload byte count, and
    the consumed-bytes window equals header + payload length.
 
-3. ``round-trip``: ``encode_grpc_message(payload, compressed) ==
-   data[0..consumed]`` on a successful decode when the input
-   buffer was the encoder's output. We assert this on
-   ``encoded || tail`` inputs the harness synthesises from the
-   raw fuzz bytes so the codec is exercised on both directions.
+3. ``round-trip``: ``encode_grpc_message(payload, out,
+   compressed) == data[0..consumed]`` on a successful decode
+   when the input buffer was the encoder's output. We assert
+   this on ``encoded || tail`` inputs the harness synthesises
+   from the raw fuzz bytes so the codec is exercised on both
+   directions.
 
 4. ``needs_more`` is monotonic: if the same raw bytes are
    decoded twice the result is byte-identical (re-parse is
@@ -123,8 +124,9 @@ def target(data: List[UInt8]) raises:
         for i in range(split):
             payload.append(data[i])
         var compressed = (n > 0) and ((Int(data[0]) & 0x01) == 1)
-        var frame_bytes = encode_grpc_message(
-            Span[UInt8, _](payload), compressed=compressed
+        var frame_bytes = List[UInt8]()
+        encode_grpc_message(
+            Span[UInt8, _](payload), frame_bytes, compressed=compressed
         )
         # Append the residual tail so the buffer looks like a stream
         # where the next frame may begin mid-buffer.

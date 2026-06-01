@@ -87,11 +87,15 @@ def _qpack_request_headers() raises -> List[UInt8]:
     hs.append(QpackHeader(":scheme", "https"))
     hs.append(QpackHeader(":path", "/"))
     hs.append(QpackHeader("x-trace-id", "abc-123"))
-    return encode_field_section(hs)
+    var out = List[UInt8]()
+    encode_field_section(hs, out)
+    return out^
 
 
 def _frame(ftype: UInt64, payload: List[UInt8]) raises -> List[UInt8]:
-    return encode_h3_frame(ftype, Span[UInt8, _](payload))
+    var out = List[UInt8]()
+    encode_h3_frame(ftype, Span[UInt8, _](payload), out)
+    return out^
 
 
 def test_initial_state() raises:
@@ -136,8 +140,10 @@ def test_headers_then_data_then_trailers() raises:
     for c in String("hi").as_bytes():
         data_payload.append(c)
     var df = _frame(H3_FRAME_TYPE_DATA, data_payload)
-    var trailers_qpack = encode_field_section(
-        List[QpackHeader]([QpackHeader("x-checksum", "deadbeef")])
+    var trailers_qpack = List[UInt8]()
+    encode_field_section(
+        List[QpackHeader]([QpackHeader("x-checksum", "deadbeef")]),
+        trailers_qpack,
     )
     var tf = _frame(H3_FRAME_TYPE_HEADERS, trailers_qpack)
     var _ = feed_into(r, Span[UInt8, _](hf), rec)
@@ -221,8 +227,10 @@ def test_repeat_headers_after_trailers_is_protocol_error() raises:
     var r = H3RequestReader.new()
     var rec = _Recorder.new()
     var hf = _frame(H3_FRAME_TYPE_HEADERS, _qpack_request_headers())
-    var trailers_qpack = encode_field_section(
-        List[QpackHeader]([QpackHeader("x-tail", "1")])
+    var trailers_qpack = List[UInt8]()
+    encode_field_section(
+        List[QpackHeader]([QpackHeader("x-tail", "1")]),
+        trailers_qpack,
     )
     var tf = _frame(H3_FRAME_TYPE_HEADERS, trailers_qpack)
     var _ = feed_into(r, Span[UInt8, _](hf), rec)

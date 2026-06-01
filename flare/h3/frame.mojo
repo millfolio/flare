@@ -97,21 +97,27 @@ struct H3Frame(Copyable, Movable):
 
 
 def encode_h3_frame(
-    frame_type: UInt64, payload: Span[UInt8, _]
-) raises -> List[UInt8]:
-    """Encode a frame given its type and raw payload bytes."""
+    frame_type: UInt64,
+    payload: Span[UInt8, _],
+    mut out: List[UInt8],
+) raises:
+    """Append a complete RFC 9114 §7 frame (type varint, length
+    varint, payload bytes) to ``out``.
+
+    The caller owns the buffer and may reuse the same
+    ``List[UInt8]`` across frames so the underlying allocation
+    amortises across the stream. The encoder appends only; it
+    never reads from or truncates the existing contents.
+    """
     var type_bytes = encode_varint(frame_type)
     var len_bytes = encode_varint(UInt64(len(payload)))
-    var out = List[UInt8](
-        capacity=len(type_bytes) + len(len_bytes) + len(payload)
-    )
+    out.reserve(len(out) + len(type_bytes) + len(len_bytes) + len(payload))
     for i in range(len(type_bytes)):
         out.append(type_bytes[i])
     for i in range(len(len_bytes)):
         out.append(len_bytes[i])
     for i in range(len(payload)):
         out.append(payload[i])
-    return out^
 
 
 def decode_h3_frame(buf: Span[UInt8, _]) raises -> H3Frame:
@@ -164,12 +170,22 @@ struct H3Setting(Copyable, Movable):
     var value: UInt64
 
 
-def encode_h3_settings(settings: List[H3Setting]) raises -> List[UInt8]:
-    """Encode a list of SETTINGS pairs as the body of an HTTP/3
-    SETTINGS frame. The result is the *payload* only; wrap it in
+def encode_h3_settings(
+    settings: List[H3Setting],
+    mut out: List[UInt8],
+) raises:
+    """Append the body of an HTTP/3 SETTINGS frame to ``out``.
+
+    Writes the ``identifier`` / ``value`` varint pairs in order;
+    the result is the *payload* only. Wrap it in
     :func:`encode_h3_frame` with type
-    :data:`H3_FRAME_TYPE_SETTINGS` to get a complete frame."""
-    var out = List[UInt8]()
+    :data:`H3_FRAME_TYPE_SETTINGS` to get a complete frame.
+
+    The caller owns the buffer and may reuse the same
+    ``List[UInt8]`` across calls so the underlying allocation
+    amortises across the stream. The encoder appends only; it
+    never reads from or truncates the existing contents.
+    """
     for i in range(len(settings)):
         var id_bytes = encode_varint(settings[i].identifier)
         var val_bytes = encode_varint(settings[i].value)
@@ -177,7 +193,6 @@ def encode_h3_settings(settings: List[H3Setting]) raises -> List[UInt8]:
             out.append(id_bytes[j])
         for j in range(len(val_bytes)):
             out.append(val_bytes[j])
-    return out^
 
 
 def decode_h3_settings(payload: Span[UInt8, _]) raises -> List[H3Setting]:

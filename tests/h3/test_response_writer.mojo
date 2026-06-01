@@ -66,7 +66,8 @@ struct _Recorder(H3RequestEventHandler, Movable):
 
 
 def test_status_only() raises:
-    var bytes = encode_response_headers(200, List[QpackHeader]())
+    var bytes = List[UInt8]()
+    encode_response_headers(200, List[QpackHeader](), bytes)
     var r = H3RequestReader.new()
     var rec = _Recorder.new()
     var _ = feed_into(r, Span[UInt8, _](bytes), rec)
@@ -80,7 +81,8 @@ def test_status_with_application_headers() raises:
     var hs = List[QpackHeader]()
     hs.append(QpackHeader("Content-Type", "application/json"))
     hs.append(QpackHeader("X-Trace-ID", "abc"))
-    var bytes = encode_response_headers(200, hs)
+    var bytes = List[UInt8]()
+    encode_response_headers(200, hs, bytes)
     var r = H3RequestReader.new()
     var rec = _Recorder.new()
     var _ = feed_into(r, Span[UInt8, _](bytes), rec)
@@ -100,9 +102,10 @@ def test_status_with_application_headers() raises:
 
 
 def test_invalid_status_raises() raises:
+    var bytes = List[UInt8]()
     var raised = False
     try:
-        var _ = encode_response_headers(99, List[QpackHeader]())
+        encode_response_headers(99, List[QpackHeader](), bytes)
     except:
         raised = True
     assert_true(raised)
@@ -111,20 +114,23 @@ def test_invalid_status_raises() raises:
 def test_pseudo_header_in_application_headers_raises() raises:
     var hs = List[QpackHeader]()
     hs.append(QpackHeader(":scheme", "https"))
+    var bytes = List[UInt8]()
     var raised = False
     try:
-        var _ = encode_response_headers(200, hs)
+        encode_response_headers(200, hs, bytes)
     except:
         raised = True
     assert_true(raised)
 
 
 def test_data_frame_round_trip() raises:
-    var hbytes = encode_response_headers(200, List[QpackHeader]())
+    var hbytes = List[UInt8]()
+    encode_response_headers(200, List[QpackHeader](), hbytes)
     var payload = List[UInt8]()
     for c in String("hello").as_bytes():
         payload.append(c)
-    var dbytes = encode_response_data(Span[UInt8, _](payload))
+    var dbytes = List[UInt8]()
+    encode_response_data(Span[UInt8, _](payload), dbytes)
     var stream = List[UInt8]()
     for i in range(len(hbytes)):
         stream.append(hbytes[i])
@@ -144,13 +150,16 @@ def test_data_frame_round_trip() raises:
 
 
 def test_trailers_round_trip() raises:
-    var hbytes = encode_response_headers(200, List[QpackHeader]())
+    var hbytes = List[UInt8]()
+    encode_response_headers(200, List[QpackHeader](), hbytes)
     var payload = List[UInt8]()
     payload.append(UInt8(0x41))
-    var dbytes = encode_response_data(Span[UInt8, _](payload))
+    var dbytes = List[UInt8]()
+    encode_response_data(Span[UInt8, _](payload), dbytes)
     var trailers = List[QpackHeader]()
     trailers.append(QpackHeader("X-Sum", "deadbeef"))
-    var tbytes = encode_response_trailers(trailers)
+    var tbytes = List[UInt8]()
+    encode_response_trailers(trailers, tbytes)
     var stream = List[UInt8]()
     for i in range(len(hbytes)):
         stream.append(hbytes[i])
@@ -178,9 +187,10 @@ def test_trailers_round_trip() raises:
 def test_pseudo_header_in_trailers_raises() raises:
     var trailers = List[QpackHeader]()
     trailers.append(QpackHeader(":path", "/x"))
+    var bytes = List[UInt8]()
     var raised = False
     try:
-        var _ = encode_response_trailers(trailers)
+        encode_response_trailers(trailers, bytes)
     except:
         raised = True
     assert_true(raised)

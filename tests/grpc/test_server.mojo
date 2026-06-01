@@ -35,6 +35,20 @@ from flare.grpc import (
 )
 
 
+def _encode_lpm(
+    payload: Span[UInt8, _], compressed: Bool = False
+) raises -> List[UInt8]:
+    """Test helper: encode a single LPM frame into a fresh
+    ``List[UInt8]``. Tests that exercise the wire-shape of the
+    LPM frame still want an owned ``List`` to compare against, so
+    this helper keeps the ``encode_grpc_message(payload, out, ...)``
+    buffer-reuse contract centralised in one place.
+    """
+    var out = List[UInt8]()
+    encode_grpc_message(payload, out, compressed=compressed)
+    return out^
+
+
 def _headers(
     var method: String,
     var path: String,
@@ -283,7 +297,7 @@ def test_stitch_single_lpm_frame() raises:
     payload.append(UInt8(0x41))
     payload.append(UInt8(0x42))
     payload.append(UInt8(0x43))
-    var encoded = encode_grpc_message(Span[UInt8, _](payload))
+    var encoded = _encode_lpm(Span[UInt8, _](payload))
     var stitched = stitch_request_data(Span[UInt8, _](encoded))
     assert_equal(len(stitched), 3)
     assert_equal(stitched[0], UInt8(0x41))
@@ -298,8 +312,8 @@ def test_stitch_multiple_lpm_frames() raises:
     p2.append(UInt8(0x02))
     p2.append(UInt8(0x03))
     var combined = List[UInt8]()
-    var e1 = encode_grpc_message(Span[UInt8, _](p1))
-    var e2 = encode_grpc_message(Span[UInt8, _](p2))
+    var e1 = _encode_lpm(Span[UInt8, _](p1))
+    var e2 = _encode_lpm(Span[UInt8, _](p2))
     for i in range(len(e1)):
         combined.append(e1[i])
     for i in range(len(e2)):
@@ -333,7 +347,7 @@ def test_stitch_rejects_truncated_frame() raises:
 def test_stitch_rejects_compressed_frame() raises:
     var payload = List[UInt8]()
     payload.append(UInt8(0xFF))
-    var encoded = encode_grpc_message(Span[UInt8, _](payload), compressed=True)
+    var encoded = _encode_lpm(Span[UInt8, _](payload), compressed=True)
     var raised = False
     try:
         var _ = stitch_request_data(Span[UInt8, _](encoded))
@@ -346,7 +360,7 @@ def test_run_unary_call_echo() raises:
     var payload = List[UInt8]()
     payload.append(UInt8(0xAA))
     payload.append(UInt8(0xBB))
-    var encoded = encode_grpc_message(Span[UInt8, _](payload))
+    var encoded = _encode_lpm(Span[UInt8, _](payload))
     var handler = EchoUnary(seen_path=String(""))
     var outcome = run_unary_call(
         handler,
@@ -389,7 +403,7 @@ def test_run_unary_call_invalid_method_emits_invalid_argument() raises:
     """Header-validation failure (`GET` instead of `POST`) must
     surface as `INVALID_ARGUMENT` rather than raising.
     """
-    var encoded = encode_grpc_message(Span[UInt8, _](List[UInt8]()))
+    var encoded = _encode_lpm(Span[UInt8, _](List[UInt8]()))
     var handler = EchoUnary(seen_path=String(""))
     var outcome = run_unary_call(
         handler,
@@ -439,7 +453,7 @@ def test_run_unary_call_handler_raise_emits_internal() raises:
     """
     var payload = List[UInt8]()
     payload.append(UInt8(0xAA))
-    var encoded = encode_grpc_message(Span[UInt8, _](payload))
+    var encoded = _encode_lpm(Span[UInt8, _](payload))
     var handler = RaisingUnary(hit=False)
     var outcome = run_unary_call(
         handler,
@@ -503,7 +517,7 @@ def test_emit_trailing_headers_status_with_details_bin() raises:
 def test_run_unary_call_error_status_emits_empty_body() raises:
     var payload = List[UInt8]()
     payload.append(UInt8(0xAA))
-    var encoded = encode_grpc_message(Span[UInt8, _](payload))
+    var encoded = _encode_lpm(Span[UInt8, _](payload))
     var handler = ErrorUnary(hit=False)
     var outcome = run_unary_call(
         handler,

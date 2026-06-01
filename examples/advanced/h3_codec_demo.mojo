@@ -119,26 +119,25 @@ def _build_request_bytes() raises -> List[UInt8]:
     req_headers.append(QpackHeader(":path", "/index.html"))
     req_headers.append(QpackHeader("user-agent", "flare-h3-demo/0"))
 
-    var headers_payload = encode_field_section(req_headers)
-    var wire = encode_h3_frame(
-        H3_FRAME_TYPE_HEADERS, Span[UInt8, _](headers_payload)
+    var headers_payload = List[UInt8]()
+    encode_field_section(req_headers, headers_payload)
+    var wire = List[UInt8]()
+    encode_h3_frame(
+        H3_FRAME_TYPE_HEADERS, Span[UInt8, _](headers_payload), wire
     )
 
     var body = List[UInt8]()
     for b in String("hello").as_bytes():
         body.append(b)
-    var data_bytes = encode_h3_frame(H3_FRAME_TYPE_DATA, Span[UInt8, _](body))
-    for b in data_bytes:
-        wire.append(b)
+    encode_h3_frame(H3_FRAME_TYPE_DATA, Span[UInt8, _](body), wire)
 
     var trailers = List[QpackHeader]()
     trailers.append(QpackHeader("x-trailer", "ok"))
-    var trailer_payload = encode_field_section(trailers)
-    var trailer_bytes = encode_h3_frame(
-        H3_FRAME_TYPE_HEADERS, Span[UInt8, _](trailer_payload)
+    var trailer_payload = List[UInt8]()
+    encode_field_section(trailers, trailer_payload)
+    encode_h3_frame(
+        H3_FRAME_TYPE_HEADERS, Span[UInt8, _](trailer_payload), wire
     )
-    for b in trailer_bytes:
-        wire.append(b)
     return wire^
 
 
@@ -172,20 +171,17 @@ def _build_response_bytes() raises -> List[UInt8]:
     headers.append(QpackHeader("content-type", "application/json"))
     headers.append(QpackHeader("cache-control", "no-store"))
 
-    var wire = encode_response_headers(200, headers)
+    var wire = List[UInt8]()
+    encode_response_headers(200, headers, wire)
 
     var body = List[UInt8]()
     for b in String('{"ok": true}').as_bytes():
         body.append(b)
-    var data_bytes = encode_response_data(Span[UInt8, _](body))
-    for b in data_bytes:
-        wire.append(b)
+    encode_response_data(Span[UInt8, _](body), wire)
 
     var trailers = List[QpackHeader]()
     trailers.append(QpackHeader("x-runtime-ms", "3"))
-    var trailer_bytes = encode_response_trailers(trailers)
-    for b in trailer_bytes:
-        wire.append(b)
+    encode_response_trailers(trailers, wire)
     return wire^
 
 

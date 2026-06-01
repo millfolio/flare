@@ -36,7 +36,8 @@ def test_lpm_round_trip_short_payload() raises:
     """5-byte LPM header + 4-byte payload "ping". Encoded form:
     ``00 00 00 00 04 70 69 6e 67``."""
     var payload = _bytes(0x70, 0x69, 0x6E, 0x67)
-    var enc = encode_grpc_message(Span[UInt8](payload), compressed=False)
+    var enc = List[UInt8]()
+    encode_grpc_message(Span[UInt8](payload), enc, compressed=False)
     assert_equal(len(enc), 9)
     assert_equal(Int(enc[0]), 0x00)  # flag = uncompressed
     assert_equal(Int(enc[1]), 0x00)
@@ -57,7 +58,8 @@ def test_lpm_round_trip_compressed_flag() raises:
     does *not* run the compression -- caller supplies pre-
     compressed bytes."""
     var payload = _bytes(0x78, 0x9C)  # placeholder zlib header
-    var enc = encode_grpc_message(Span[UInt8](payload), compressed=True)
+    var enc = List[UInt8]()
+    encode_grpc_message(Span[UInt8](payload), enc, compressed=True)
     assert_equal(Int(enc[0]), 0x01)
     var dec = decode_grpc_message(Span[UInt8](enc))
     assert_false(dec.needs_more)
@@ -68,7 +70,8 @@ def test_lpm_empty_payload() raises:
     """A zero-length payload is legal (e.g. an empty proto3
     message). Encoded form: ``00 00 00 00 00``."""
     var empty = List[UInt8]()
-    var enc = encode_grpc_message(Span[UInt8](empty), compressed=False)
+    var enc = List[UInt8]()
+    encode_grpc_message(Span[UInt8](empty), enc, compressed=False)
     assert_equal(len(enc), 5)
     var dec = decode_grpc_message(Span[UInt8](enc))
     assert_false(dec.needs_more)
@@ -103,8 +106,10 @@ def test_lpm_decoder_handles_back_to_back_frames() raises:
     second one cleanly."""
     var p1 = _bytes(0xAA)
     var p2 = _bytes(0xBB, 0xCC)
-    var e1 = encode_grpc_message(Span[UInt8](p1))
-    var e2 = encode_grpc_message(Span[UInt8](p2))
+    var e1 = List[UInt8]()
+    encode_grpc_message(Span[UInt8](p1), e1)
+    var e2 = List[UInt8]()
+    encode_grpc_message(Span[UInt8](p2), e2)
     var buf = List[UInt8]()
     for i in range(len(e1)):
         buf.append(e1[i])
