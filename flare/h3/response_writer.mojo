@@ -1,0 +1,135 @@
+"""HTTP/3 response-stream writer -- sans-I/O byte emitter.
+
+Symmetric to :mod:`flare.h3.request_reader`. Builds the bytes
+the H3 server reactor (Phase E) hands to the QUIC stream
+abstraction for a response on a request stream.
+
+A complete H3 response is at most three concatenated wire
+fragments:
+
+  HEADERS frame (status pseudo-header + application headers,
+                 QPACK-encoded)
+  DATA frame    (zero or more, body bytes)
+  HEADERS frame (optional trailers, QPACK-encoded)
+
+The writer doesn't own the bytes -- it returns owned ``List[
+UInt8]`` outputs that the caller stitches into one or more QUIC
+stream sends. The reactor wrapper drives flow control, MTU
+splits, and FIN; this module is purely the codec.
+
+Public surface:
+
+* :func:`encode_response_headers` -- build the HEADERS frame
+  bytes for the initial response. Always emits ``:status`` first
+  per RFC 9114 §4.3, then the supplied application headers
+  verbatim. Lowercases header names on the way through to keep
+  the output H3-conformant.
+* :func:`encode_response_data` -- wrap a payload chunk in a
+  DATA frame. The reactor calls this once per body chunk to
+  preserve back-pressure.
+* :func:`encode_response_trailers` -- build the trailing
+  HEADERS frame.
+
+Sans-I/O contract: the writer holds zero state; every entry
+point is a pure function over its inputs. The reactor wrapper
+keeps the per-stream cursor + FIN bit.
+
+References:
+- RFC 9114 §4 (HTTP Message Exchanges) + §7 (Frames).
+- RFC 9204 (QPACK).
+"""
+
+from std.collections import List
+from std.memory import Span
+
+from flare.qpack import QpackHeader, encode_field_section
+
+from .frame import H3_FRAME_TYPE_DATA, H3_FRAME_TYPE_HEADERS, encode_h3_frame
+
+
+def _lowercase_ascii(s: String) -> String:
+    """Return a lowercased copy of an ASCII header name.
+
+    HTTP/3 mandates lowercase field names on the wire (RFC 9114
+    §4.2); we sanitise here so callers don't have to remember.
+    Bytes outside the ASCII range pass through unchanged -- the
+    QPACK encoder accepts them and the QUIC peer surfaces a
+    ``H3_MESSAGE_ERROR`` if they violate lowercasing.
+    """
+    var bytes = s.as_bytes()
+    var out = String(capacity=len(bytes) + 1)
+    for i in range(len(bytes)):
+        var b = bytes[i]
+        if b >= UInt8(ord("A")) and b <= UInt8(ord("Z")):
+            out += chr(Int(b) + 32)
+        else:
+            out += chr(Int(b))
+    return out^
+
+
+def encode_response_headers(
+    status: Int,
+    headers: List[QpackHeader],
+) raises -> List[UInt8]:
+    """Build the HEADERS-frame bytes for an HTTP/3 response.
+
+    Emits ``:status`` as the first field per RFC 9114 §4.3.2,
+    then the supplied application headers (all names lowercased).
+    The caller MUST NOT include ``:status`` in ``headers`` --
+    the reader rejects field sections that emit pseudo-headers
+    after a regular header (RFC 9114 §4.3 invariant), and this
+    writer skips application-pseudoheader emission entirely.
+    """
+    if status < 100 or status > 599:
+        raise Error("h3 writer: invalid HTTP status " + String(status))
+    var emit = List[QpackHeader]()
+    emit.append(QpackHeader(":status", String(status)))
+    for i in range(len(headers)):
+        var name = _lowercase_ascii(headers[i].name)
+        if name == ":status" or (
+            len(name.as_bytes()) > 0 and name.as_bytes()[0] == UInt8(ord(":"))
+        ):
+            raise Error(
+                "h3 writer: pseudo-header '"
+                + name
+                + "' not allowed in application headers"
+            )
+        emit.append(QpackHeader(name^, String(headers[i].value)))
+    var qpack_payload = encode_field_section(emit)
+    return encode_h3_frame(H3_FRAME_TYPE_HEADERS, Span[UInt8, _](qpack_payload))
+
+
+def encode_response_data(payload: Span[UInt8, _]) raises -> List[UInt8]:
+    """Wrap ``payload`` in an HTTP/3 DATA frame.
+
+    The H3 server reactor calls this once per body chunk so
+    flow-control back-pressure on the QUIC stream applies per
+    chunk; emitting the entire body in one DATA frame is legal
+    but loses the granularity. Empty payloads are legal and
+    encode as a 2-byte frame (type=0x00 + length=0x00).
+    """
+    return encode_h3_frame(H3_FRAME_TYPE_DATA, payload)
+
+
+def encode_response_trailers(
+    trailers: List[QpackHeader],
+) raises -> List[UInt8]:
+    """Build the trailing HEADERS-frame bytes.
+
+    Trailers MUST NOT include pseudo-headers; the writer rejects
+    any field whose name starts with ``:``. The reactor sends
+    this frame followed by FIN to close the response side of the
+    request stream.
+    """
+    var emit = List[QpackHeader]()
+    for i in range(len(trailers)):
+        var name = _lowercase_ascii(trailers[i].name)
+        if len(name.as_bytes()) > 0 and name.as_bytes()[0] == UInt8(ord(":")):
+            raise Error(
+                "h3 writer: pseudo-header '"
+                + name
+                + "' not allowed in trailers"
+            )
+        emit.append(QpackHeader(name^, String(trailers[i].value)))
+    var qpack_payload = encode_field_section(emit)
+    return encode_h3_frame(H3_FRAME_TYPE_HEADERS, Span[UInt8, _](qpack_payload))

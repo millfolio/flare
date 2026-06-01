@@ -55,6 +55,7 @@ SANS_IO_FILES=(
     "flare/quic/cc.mojo"
     "flare/quic/state.mojo"
     "flare/h3/request_reader.mojo"
+    "flare/h3/response_writer.mojo"
     "flare/qpack/static_table.mojo"
     "flare/qpack/codec.mojo"
 )

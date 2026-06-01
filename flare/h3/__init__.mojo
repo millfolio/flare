@@ -56,3 +56,8 @@ from .request_reader import (
     H3RequestReader,
     feed,
 )
+from .response_writer import (
+    encode_response_data,
+    encode_response_headers,
+    encode_response_trailers,
+)
