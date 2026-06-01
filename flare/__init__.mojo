@@ -81,20 +81,35 @@ flare.http     - HTTP/1.1 client + reactor server + Router /
 flare.http.cache - RFC 9111 cache primitives (CacheControl directive
                  parser, CacheKey, InMemoryCacheStore)
 flare.grpc     - gRPC primitives on flare.http2: LPM message framing,
-                 canonical Status codes, Metadata carrier, and the
-                 unary server adapter (HTTP/2 stream + h2 trailers
-                 → typed call context + Status outcome)
+                 canonical Status codes (with optional
+                 ``grpc-status-details-bin`` payload), Metadata
+                 carrier, and the unary server adapter
+                 (``GrpcRequestHeaders`` typed request-headers
+                 carrier → ``GrpcUnaryReply`` typed handler return
+                 (``ok`` / ``err`` factories) → ``run_unary_call``
+                 never-raises orchestrator that maps header / LPM /
+                 handler failures to typed ``INVALID_ARGUMENT`` /
+                 ``INTERNAL`` outcomes)
 flare.openapi  - OpenAPI 3.1 spec model + deterministic JSON emitter
 flare.quic     - Sans-I/O QUIC v1 codec primitives (varint, long /
                  short packet headers, all 22 RFC 9000 §19 transport
-                 frames, RFC 9000 §18 transport parameters, RFC 9000
-                 §3 / §13 connection + stream state machines,
-                 CUBIC + HyStart++ congestion controller per RFC 9438
-                 / RFC 9406 / RFC 9002 §7.7); reactor + TLS drive
-                 ship later alongside the QUIC server
+                 frames dispatched via the ``FrameHandler`` trait +
+                 ``parse_frame_into[H]`` (per-type callbacks; no
+                 intermediate union carrier), with per-type
+                 ``encode_*(payload, mut out: List[UInt8])`` writers,
+                 RFC 9000 §18 transport parameters, RFC 9000 §3 /
+                 §13 connection + stream state machines, CUBIC +
+                 HyStart++ congestion controller per RFC 9438 /
+                 RFC 9406 / RFC 9002 §7.7); reactor + TLS drive ship
+                 later alongside the QUIC server
 flare.h3       - Sans-I/O HTTP/3 frame codec, SETTINGS payload,
-                 request-stream reader + response-stream writer
-                 (RFC 9114 §4 + §7)
+                 request-stream reader (``H3RequestReader`` +
+                 ``H3RequestEventHandler`` + ``feed_into[H]`` --
+                 typed ``on_headers`` / ``on_data`` / ``on_trailers``
+                 callbacks), response-stream writer with QPACK-
+                 encoded field sections and the ``mut out:
+                 List[UInt8]`` buffer-reuse contract (RFC 9114 §4 +
+                 §7)
 flare.qpack    - Sans-I/O static-only QPACK encoder / decoder for
                  HTTP/3 field sections (RFC 9204 Appendix A static
                  table + literal + Huffman, shared with HPACK)

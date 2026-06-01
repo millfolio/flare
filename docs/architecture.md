@@ -94,26 +94,36 @@ flare.quic     Sans-I/O QUIC v1 codec primitives + pure state
                machines: variable-length integer codec
                (RFC 9000 §16); long / short packet header codec
                (RFC 9000 §17); all 22 RFC 9000 §19 transport
-               frames (discriminated `Frame` union with
-               encode_frame / parse_frame); transport-parameter
-               codec (RFC 9000 §18); connection + stream state
-               machines (RFC 9000 §3, §10, §13); CUBIC +
-               HyStart++ congestion controller + RFC 9002 §7.7
-               pacing budget as pure functions over a `CcState`
-               value. No socket I/O, no TLS handshake -- the
-               reactor + TLS-on-UDP FFI that drive the wire
-               land alongside the QUIC server in a follow-up
-               release.
+               frames driven by a `FrameHandler` trait +
+               `parse_frame_into[H](buf, handler)` dispatcher
+               that fires per-type `on_*` callbacks against the
+               caller's handler (no intermediate union carrier),
+               with the per-type `encode_*(payload, mut out:
+               List[UInt8])` writers appending to a caller-owned
+               buffer; transport-parameter codec (RFC 9000 §18);
+               connection + stream state machines (RFC 9000 §3,
+               §10, §13); CUBIC + HyStart++ congestion
+               controller + RFC 9002 §7.7 pacing budget as pure
+               functions over a `CcState` value. No socket I/O,
+               no TLS handshake -- the reactor + TLS-on-UDP FFI
+               that drive the wire land alongside the QUIC
+               server in a follow-up release.
 flare.h3       Sans-I/O HTTP/3 codec primitives: frame codec +
-               SETTINGS payload (RFC 9114 §7), request-stream
-               state machine that emits typed events (HEADERS,
-               DATA, TRAILERS, UNKNOWN_FRAME, NEEDS_MORE,
-               PROTOCOL_ERROR) per RFC 9114 §4, and a response-
-               stream writer that emits HEADERS / DATA /
-               TRAILERS frames with QPACK-encoded field
+               SETTINGS payload (RFC 9114 §7); request-stream
+               state machine (`H3RequestReader` + the
+               `H3RequestEventHandler` trait + `feed_into[H]`
+               dispatcher) that consumes wire bytes and fires
+               typed `on_headers` / `on_data` / `on_trailers` /
+               `on_unknown_frame` / `on_protocol_error`
+               callbacks on the caller's handler per RFC 9114
+               §4; response-stream writer that emits HEADERS /
+               DATA / TRAILERS frames with QPACK-encoded field
                sections, ASCII header-name lowercasing, and
-               pseudo-header validation. Server reactor lives
-               with the QUIC reactor in a follow-up release.
+               pseudo-header validation. The encoders accept a
+               `mut out: List[UInt8]` so the caller threads a
+               per-connection buffer through repeated writes.
+               Server reactor lives with the QUIC reactor in a
+               follow-up release.
 flare.qpack    Sans-I/O static-only QPACK encoder + decoder
                (RFC 9204). Static table per Appendix A (99
                entries), literal field lines with literal
