@@ -11,34 +11,33 @@ shape QUIC API is what the broader ecosystem (quiche, ngtcp2,
 lsquic, msquic) standardized on, and `rustls` carries that API
 natively (`rustls::quic::ServerConnection`).
 
-## Scope of this commit (Track Q2 scaffold)
+## Module surface
 
-The runtime + integration tests need a typed boundary they can
-target while the Rust crate ships in its own focused commit.
 This module declares:
 
 - :class:`RustlsQuicConfig` -- server-side acceptor config
-  (certificate chain, private key, ALPN list, transport
-  parameters callback). Owns the configuration the Rust crate
-  reads through the C ABI.
+  (certificate chain, private key, ALPN list). Owns the
+  configuration the Rust crate reads through the C ABI.
 - :class:`RustlsQuicAcceptor` -- factory for per-connection
   TLS sessions. Conceptually parallel to
   :class:`flare.tls.acceptor.TlsAcceptor`, but produces QUIC
   sessions rather than TCP TLS streams.
 - :class:`RustlsQuicSession` -- per-connection rustls handle.
-  The QUIC reactor (Track Q3) feeds it CRYPTO-frame bytes per
+  The QUIC reactor (Track Q3-W) feeds it CRYPTO-frame bytes per
   encryption level and pulls handshake output bytes plus
   derived keys back out.
 - :class:`RustlsQuicError` -- typed error carrier for the
   cases the reactor must distinguish (handshake-incomplete,
   protocol violation, certificate rejected, internal error).
 
-Every method that would touch the Rust crate raises a clear
-``Error`` with a "rustls Rust crate not built yet" message.
-The Rust crate (`flare/tls/ffi/rustls_wrapper.rs`) +
-`build_rustls.sh` activation script land in their own commit;
-this module locks the Mojo-side API shape so the reactor +
-H3 server work can build against it without blocking.
+Both ``RustlsQuicAcceptor`` and ``RustlsQuicSession`` are
+``Movable`` (not ``Copyable``) because they own a Rust-allocated
+``Box<Acceptor>`` / ``Box<Session>`` respectively; copy would
+double-free on drop. The carriers route every FFI call through
+``read lib`` borrow helpers (see
+``flare/tls/_rustls_quic_ffi.mojo``) so Mojo's ASAP destructor
+cannot unmap ``libflare_rustls_quic.so`` between
+``get_function`` and the call.
 
 References:
 - RFC 9001 "Using TLS to Secure QUIC".
@@ -47,6 +46,21 @@ References:
 """
 
 from std.collections import List, Optional
+from std.ffi import OwnedDLHandle
+
+from ._rustls_quic_ffi import (
+    _do_acceptor_new,
+    _do_acceptor_free,
+    _do_accept,
+    _do_session_free,
+    _do_feed_crypto,
+    _do_take_crypto,
+    _do_is_handshake_complete,
+    _do_alpn,
+    _do_last_error,
+    _find_rustls_quic_lib,
+    _encode_alpn_wire,
+)
 
 
 # ── Encryption levels (RFC 9001 §4) ─────────────────────────────────────
@@ -202,29 +216,80 @@ struct RustlsQuicErrorKind:
 # ── Acceptor ────────────────────────────────────────────────────────────
 
 
-struct RustlsQuicAcceptor(Copyable, Movable):
+struct RustlsQuicAcceptor(Movable):
     """Factory for per-connection rustls QUIC sessions.
 
     Long-lived. One instance per QUIC listener, shared across
     every connection it accepts. The actual rustls
-    ``rustls::quic::ServerConfig`` lives inside the Rust crate;
-    this carrier holds an opaque handle (deferred to Track Q2
-    follow-up) plus enough configuration metadata that tests +
-    the reactor can introspect the carrier without entering
-    Rust code.
+    ``rustls::quic::ServerConfig`` lives behind a heap-allocated
+    Rust ``Box<Acceptor>``; this carrier holds the raw pointer
+    (as ``Int``) plus the loaded ``libflare_rustls_quic.so``
+    handle.
+
+    Constructed lifecycle:
+
+    - ``__init__`` calls ``flare_rustls_quic_acceptor_new`` with
+      the PEM cert + key + wire-format ALPN list. Returns a
+      carrier whose ``_opaque_handle`` is 0 when the FFI
+      rejects the input (e.g. empty / malformed PEM). The
+      reactor and per-connection ``accept()`` path treat a 0
+      handle as a configuration error and bounce every
+      connection immediately, surfacing the rustls last-error
+      message via ``RustlsQuicError``.
+    - ``__del__`` calls ``flare_rustls_quic_acceptor_free``
+      to release the Rust-side ``Box<Acceptor>`` (no-op on a
+      0 handle).
+    - ``accept(dcid)`` calls ``flare_rustls_quic_accept`` to
+      construct a fresh per-connection
+      ``rustls::quic::ServerConnection`` and wraps it in
+      :class:`RustlsQuicSession`.
     """
 
     var config: RustlsQuicConfig
 
     var _opaque_handle: Int
-    """Opaque pointer (as ``Int``) into the Rust-side
-    `Arc<ServerConfig>`. Zero in this scaffold (the Rust crate
-    is not built); the follow-up commit replaces with the real
-    handle returned from `flare_rustls_acceptor_new`."""
+    """Raw ``Box<Acceptor>*`` (as ``Int``). Zero when the FFI
+    construction failed; the reactor surfaces a configuration
+    error in that case."""
 
-    def __init__(out self, config: RustlsQuicConfig):
-        self.config = config.copy()
-        self._opaque_handle = 0
+    var _lib: OwnedDLHandle
+    """Pinned library handle so ``dlclose`` doesn't tear the
+    .so out from under any in-flight ``Session`` we created.
+    Same defensive pattern as :class:`flare.tls._server_ffi.ServerCtx`.
+    """
+
+    def __init__(out self, var config: RustlsQuicConfig) raises:
+        """Construct an acceptor from the supplied config.
+
+        Does not raise on FFI rejection: the carrier always
+        constructs (with ``_opaque_handle == 0`` on failure)
+        so the reactor can surface the rustls last-error
+        message via :class:`RustlsQuicError` rather than a
+        partial-construction half-state.
+        """
+        var lib = OwnedDLHandle(_find_rustls_quic_lib())
+        var cert_bytes = List[UInt8]()
+        for b in config.cert_chain_pem.as_bytes():
+            cert_bytes.append(b)
+        var key_bytes = List[UInt8]()
+        for b in config.private_key_pem.as_bytes():
+            key_bytes.append(b)
+        # The wire-format ALPN encoder raises on invalid (empty
+        # or >255-byte) protocols. Surfacing that to the caller
+        # is more useful than silently dropping the ALPN list,
+        # so we propagate the raise. The PEM cert / key parse
+        # failure path is non-raising -- it returns a NULL
+        # handle that the reactor surfaces via
+        # ``RustlsQuicError`` (see ``accept()`` below).
+        var alpn_wire = _encode_alpn_wire(config.alpn_protocols)
+        var handle = _do_acceptor_new(lib, cert_bytes, key_bytes, alpn_wire)
+        self._lib = lib^
+        self._opaque_handle = handle
+        self.config = config^
+
+    def __del__(deinit self):
+        if self._opaque_handle != 0:
+            _do_acceptor_free(self._lib, self._opaque_handle)
 
     def accept(self, dst_cid: List[UInt8]) raises -> RustlsQuicSession:
         """Create a new per-connection session bound to the
@@ -232,38 +297,70 @@ struct RustlsQuicAcceptor(Copyable, Movable):
 
         The reactor calls this once per connection after parsing
         the first Initial packet. The DCID is required because
-        the rustls binding uses it to derive the initial-secret
-        per RFC 9001 §5.2.
+        the rustls binding uses it (via the QUIC transport
+        parameters extension) to bind initial-secret derivation
+        to the per-connection identity (RFC 9001 §5.2).
         """
-        raise Error(
-            "RustlsQuicAcceptor.accept: rustls Rust crate"
-            " (flare/tls/ffi/rustls_wrapper.rs) is not built"
-            " yet (Track Q2 follow-up commit). The Mojo surface"
-            " is in place so the QUIC server reactor can target"
-            " this acceptor today; the rustls handshake lands"
-            " in its own focused commit."
+        if self._opaque_handle == 0:
+            var detail = _do_last_error(self._lib)
+            raise Error(
+                String(
+                    "RustlsQuicAcceptor.accept: acceptor handle is"
+                    " NULL (typically because the supplied PEM"
+                    " cert or key failed to parse, or the ALPN"
+                    " wire-format encoding raised); last_error="
+                )
+                + detail
+            )
+        # Empty transport_params is the v0.8 floor: the QUIC
+        # server reactor will encode the real transport parameters
+        # (initial_max_data, initial_max_streams_*, etc.) in Track
+        # Q3-W commit 2/5; for the handshake-only floor here the
+        # rustls side accepts an empty extension blob.
+        var tp = List[UInt8]()
+        var session_handle = _do_accept(self._lib, self._opaque_handle, tp)
+        if session_handle == 0:
+            var detail = _do_last_error(self._lib)
+            raise Error(String("RustlsQuicAcceptor.accept failed: ") + detail)
+        # Each session opens its own OwnedDLHandle. The .so
+        # itself stays mapped via LD_PRELOAD (set by the
+        # build_rustls.sh activation script on Linux) and via
+        # the acceptor's own handle, so opening multiple times
+        # is just a refcount bump.
+        var session_lib = OwnedDLHandle(_find_rustls_quic_lib())
+        return RustlsQuicSession._wrap(
+            session_lib^, session_handle, dst_cid.copy()
         )
 
 
 # ── Session ─────────────────────────────────────────────────────────────
 
 
-struct RustlsQuicSession(Copyable, Movable):
+struct RustlsQuicSession(Movable):
     """Per-connection rustls handle.
 
     The reactor's per-connection state machine drives this:
 
     1. Feed inbound CRYPTO frame bytes via :meth:`feed_crypto`.
     2. Pull outbound CRYPTO frame bytes via :meth:`take_crypto`.
-    3. When the handshake transitions a level into "ready",
-       :meth:`take_keys` returns the per-level packet-protection
-       keys (one set per :class:`QuicEncryptionLevel`).
-    4. :meth:`is_handshake_complete` returns True once the
+    3. :meth:`is_handshake_complete` returns True once the
        1-RTT keys are derived; from there the application can
        send data on streams.
+    4. :meth:`selected_alpn` returns the negotiated ALPN
+       identifier (e.g. ``"h3"``) so the reactor can dispatch
+       to the right application-layer driver.
 
-    Every method in the scaffold raises ``NotImplemented`` with
-    a clear message; replaced once the Rust crate ships.
+    Construction:
+
+    - Direct ``RustlsQuicSession(dcid)`` builds a carrier with
+      a 0 handle; every FFI-touching method then raises with a
+      clear "NULL session" message. Tests use this shape to
+      exercise the failure path without needing a real
+      acceptor.
+    - The production path uses
+      :meth:`RustlsQuicAcceptor.accept` which calls into the
+      ``RustlsQuicSession._wrap`` private constructor with a
+      real Rust-side ``Box<Session>*``.
     """
 
     var dst_cid: List[UInt8]
@@ -271,19 +368,63 @@ struct RustlsQuicSession(Copyable, Movable):
     reactor can sanity-check key derivation later."""
 
     var _opaque_session_handle: Int
-    """Opaque pointer (as ``Int``) into the Rust-side
-    `Box<ServerConnection>`. Zero in this scaffold."""
+    """Raw ``Box<Session>*`` (as ``Int``). Zero for a standalone
+    constructor (test path); non-zero after a successful
+    :meth:`RustlsQuicAcceptor.accept`."""
+
+    var _lib: OwnedDLHandle
+    """Pinned library handle so ``dlclose`` doesn't tear the
+    .so out from under the in-flight FFI calls."""
 
     var _level: Int
     """Current outbound encryption level. Starts at
     :data:`QuicEncryptionLevel.INITIAL`; advances as the
-    handshake progresses. Useful for tests confirming the
-    level-state-machine wiring."""
+    handshake progresses."""
 
-    def __init__(out self, dst_cid: List[UInt8]):
+    def __init__(out self, dst_cid: List[UInt8]) raises:
+        """Build a session carrier with a NULL handle. Every
+        FFI-touching method raises on a NULL handle.
+
+        Useful for testing the level machine + DCID round-trip
+        without a real acceptor; the production path uses
+        :meth:`RustlsQuicAcceptor.accept`.
+        """
+        self._lib = OwnedDLHandle(_find_rustls_quic_lib())
         self.dst_cid = dst_cid.copy()
         self._opaque_session_handle = 0
         self._level = QuicEncryptionLevel.INITIAL
+
+    def __init__(
+        out self,
+        var lib: OwnedDLHandle,
+        handle: Int,
+        var dst_cid: List[UInt8],
+    ):
+        """Internal: wrap a real Rust-side ``Box<Session>*`` that
+        :meth:`RustlsQuicAcceptor.accept` just produced.
+
+        Each session gets its own ``OwnedDLHandle`` so the .so
+        refcount stays high until the session drops; on Linux the
+        ``LD_PRELOAD`` from ``build_rustls.sh`` is the additional
+        belt-and-suspenders pin.
+        """
+        self._lib = lib^
+        self._opaque_session_handle = handle
+        self.dst_cid = dst_cid^
+        self._level = QuicEncryptionLevel.INITIAL
+
+    @staticmethod
+    def _wrap(
+        var lib: OwnedDLHandle, handle: Int, var dst_cid: List[UInt8]
+    ) -> Self:
+        """Internal: wrap a real Rust-side ``Box<Session>*`` that
+        :meth:`RustlsQuicAcceptor.accept` just produced.
+        """
+        return Self(lib^, handle, dst_cid^)
+
+    def __del__(deinit self):
+        if self._opaque_session_handle != 0:
+            _do_session_free(self._lib, self._opaque_session_handle)
 
     def feed_crypto(mut self, level: Int, data: List[UInt8]) raises:
         """Feed inbound CRYPTO frame bytes at ``level``.
@@ -293,13 +434,29 @@ struct RustlsQuicSession(Copyable, Movable):
         ``data`` buffer is a contiguous chunk; the rustls side
         reassembles fragments internally.
         """
-        raise Error(
-            "RustlsQuicSession.feed_crypto: rustls Rust crate"
-            " not built (Track Q2 follow-up). level="
-            + String(level)
-            + ", data_len="
-            + String(len(data))
+        if self._opaque_session_handle == 0:
+            raise Error(
+                "RustlsQuicSession.feed_crypto: NULL session handle"
+                " (construct via RustlsQuicAcceptor.accept for the"
+                " production path)"
+            )
+        var rc = _do_feed_crypto(
+            self._lib, self._opaque_session_handle, level, data
         )
+        if rc != 0:
+            var detail = _do_last_error(self._lib)
+            raise Error(
+                String("flare_rustls_quic_feed_crypto rc=")
+                + String(rc)
+                + ": "
+                + detail
+            )
+        # Lift the current outbound level conservatively as the
+        # rustls side advances. The reactor uses this to tag the
+        # take_crypto output for packetization; commit 4/4 will
+        # tighten this to track the rustls KeyChange enum.
+        if level > self._level:
+            self._level = level
 
     def take_crypto(self, level: Int) raises -> List[UInt8]:
         """Drain pending outbound CRYPTO frame bytes at ``level``.
@@ -308,17 +465,19 @@ struct RustlsQuicSession(Copyable, Movable):
         reactor packages the result into CRYPTO frames inside
         packets at the matching encryption level.
         """
-        raise Error(
-            "RustlsQuicSession.take_crypto: rustls Rust crate"
-            " not built (Track Q2 follow-up). level="
-            + String(level)
-        )
+        if self._opaque_session_handle == 0:
+            raise Error(
+                "RustlsQuicSession.take_crypto: NULL session handle"
+                " (construct via RustlsQuicAcceptor.accept for the"
+                " production path)"
+            )
+        return _do_take_crypto(self._lib, self._opaque_session_handle, level)
 
     def is_handshake_complete(self) -> Bool:
-        """Whether the 1-RTT keys are derived. The scaffold
-        always returns False (the handshake never completes
-        because the Rust crate is absent)."""
-        return False
+        """Whether the 1-RTT keys are derived. Returns False on a
+        NULL session (test path) or while handshaking; True after
+        rustls flips into the application-keyed state."""
+        return _do_is_handshake_complete(self._lib, self._opaque_session_handle)
 
     def selected_alpn(self) raises -> String:
         """ALPN identifier the rustls side picked.
@@ -328,10 +487,7 @@ struct RustlsQuicSession(Copyable, Movable):
         this to dispatch to the H3 server vs an alternative
         application protocol over QUIC.
         """
-        raise Error(
-            "RustlsQuicSession.selected_alpn: rustls Rust crate"
-            " not built (Track Q2 follow-up)."
-        )
+        return _do_alpn(self._lib, self._opaque_session_handle)
 
     def current_level(self) -> Int:
         """Current outbound encryption level. Useful for tests

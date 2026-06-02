@@ -106,6 +106,12 @@ ASAN_TESTS=(
   # across the call and the Rust-side panic = "abort" profile
   # leaves no unwind tables for ASan to trip over.
   "tests/tls/test_rustls_quic_crate_smoke.mojo"   # libflare_rustls_quic.so dlopen + abi_version + empty-PEM rejection
+  # Track Q2-W full Mojo carrier surface (RustlsQuicAcceptor +
+  # Session + Config + Error). Exercises every FFI thunk routed
+  # through `_rustls_quic_ffi.mojo`, including the NULL-handle
+  # raise paths the reactor depends on for the configuration-
+  # error vs handshake-failure distinction.
+  "tests/tls/test_rustls_quic.mojo"
 )
 TSAN_TESTS=(
   # Multicore + reactor (the only places we spawn pthreads)
