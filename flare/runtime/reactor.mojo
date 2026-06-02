@@ -528,7 +528,7 @@ struct Reactor(Movable):
                 )
             else:
                 var null_ts = UnsafePointer[UInt8, MutExternalOrigin](
-                    unsafe_from_address=0
+                    unsafe_from_address=Int(0)
                 )
                 n = _kevent(
                     self._fd,

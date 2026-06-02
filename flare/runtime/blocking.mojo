@@ -220,7 +220,7 @@ def _block_thunk[
     # _Task allocation itself.
     task_ptr.free()
 
-    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=0)
+    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=Int(0))
 
 
 # ── Cancel-reason error formatting ──────────────────────────────────────────

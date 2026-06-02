@@ -55,7 +55,7 @@ comptime _OpaquePtr = UnsafePointer[UInt8, MutExternalOrigin]
 # Shortcut for making a NULL pointer of the flavour we use throughout.
 @always_inline
 def _null_ptr() -> _OpaquePtr:
-    return _OpaquePtr(unsafe_from_address=0)
+    return _OpaquePtr(unsafe_from_address=Int(0))
 
 
 # ── ThreadHandle ─────────────────────────────────────────────────────────────
