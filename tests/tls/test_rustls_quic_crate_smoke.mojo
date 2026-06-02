@@ -18,15 +18,20 @@ The full handshake fixture suite lives in
 from std.ffi import OwnedDLHandle, c_int
 from std.testing import assert_equal, assert_true
 
+from flare.utils.dylib import find_flare_lib
+
 
 def _find_rustls_lib() -> String:
-    """The build_rustls.sh activation script (Track Q2-W commit 2/4)
-    installs the .so into ``$CONDA_PREFIX/lib/libflare_rustls_quic.so``.
-    Until that script lands, the cargo native output path is the
-    only one this commit can rely on; the activation commit will
-    swap this helper out for the ``find_flare_lib("rustls_quic")``
-    canonical-path resolver."""
-    return "flare/tls/ffi/rustls_wrapper/target/release/libflare_rustls_quic.so"
+    """Canonical-path resolver for the rustls QUIC cdylib.
+
+    Delegates to ``flare.utils.dylib.find_flare_lib("rustls_quic")``
+    which the Track Q2-W commit 2/4 activation script
+    (``flare/tls/ffi/build_rustls.sh``) populates at
+    ``$CONDA_PREFIX/lib/libflare_rustls_quic.so``. Falls back to
+    ``build/libflare_rustls_quic.so`` for bare checkouts that
+    haven't run the activation script yet.
+    """
+    return find_flare_lib("rustls_quic")
 
 
 def _call_abi_version(read lib: OwnedDLHandle) -> Int:

@@ -21,7 +21,7 @@ backend = { name = "pixi-build-rattler-build", version = "*" }
 # and, on Linux, a g++ toolchain (declared in the per-platform
 # [target.*.dependencies] blocks below — macOS uses system clang++ from
 # the Xcode Command Line Tools, so no conda compiler is required there).
-scripts = ["flare/tls/ffi/build.sh", "flare/http/ffi/build.sh"]
+scripts = ["flare/tls/ffi/build.sh", "flare/http/ffi/build.sh", "flare/tls/ffi/build_rustls.sh"]
 
 # ── Base runtime dependencies (lean) ──────────────────────────────────────────
 # These are everything flare itself needs at runtime — what a *user* of flare
