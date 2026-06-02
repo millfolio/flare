@@ -31,7 +31,7 @@ callback.
 
 from std.collections import Dict, Optional
 
-from flare.http import HeaderMap, Method, Request, Response
+from flare.http.wire import HeaderMap, Method, Request, Response
 
 from .frame import (
     Frame,
