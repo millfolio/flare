@@ -1,5 +1,4 @@
-"""`flare.ws.auto_client` -- ALPN-driven WebSocket client dispatcher
-(Track Q8 scaffold).
+"""`flare.ws.auto_client` -- ALPN-driven WebSocket client dispatcher.
 
 WebSocket has two carrying wires:
 
@@ -18,27 +17,41 @@ HTTP/1.1 path.
 The v0.7 cycle shipped the WS-over-h2 *primitive*
 (:class:`flare.ws.WsOverH2Stream` and
 :func:`flare.ws.bootstrap_ws_over_h2`). The v0.8 Phase D cycle
-absorbs the high-level ALPN-driven *dispatcher* (this module).
+absorbed the high-level ALPN-driven decision logic + carrier
+shape (the 13-case test corpus in :mod:`tests.ws.test_ws_autoclient`
+pins every observable outcome of the pure
+:func:`decide_wire` step).
 
-## Scope of this commit (Track Q8 scaffold)
-
-The decision logic + the carrier shape land today; the full
-runtime dispatch (opening a TLS + h2 client connection,
-inspecting the negotiated ALPN, observing SETTINGS, opening the
-Extended CONNECT stream, then handing off to
-:class:`WsOverH2Stream`) is the focused follow-up commit. The
-intent of this scaffold is the same as the other Q-tracks: lock
-the API + make every observable decision testable + raise a
-clear error from any path that depends on the deferred runtime
-wiring.
+This commit (Track Q8-W commit 1/2) wires the runtime hand-off:
+:meth:`WsAutoClient.connect` now actually drives the TLS handshake,
+inspects the negotiated ALPN, and routes to
+:class:`flare.ws.WsClient` (HTTP/1.1 Upgrade) or
+:class:`flare.ws.WsOverH2Stream` (HTTP/2 Extended CONNECT). The
+caller queries :attr:`chosen_wire` after :meth:`connect` returns
+to learn which path was taken; the path-specific carrier is
+exposed via :meth:`take_h1_client` / :meth:`is_h2_path`.
 
 References:
+
 - RFC 6455 "The WebSocket Protocol" -- HTTP/1.1 path.
 - RFC 8441 "Bootstrapping WebSockets with HTTP/2" -- h2 path.
 - RFC 7301 "ALPN" -- the wire-selection mechanism.
 """
 
-from std.collections import List
+from std.collections import List, Optional
+from std.memory import UnsafePointer
+
+from ..http.url import Url
+from ..http2.client import Http2ClientConnection
+from ..tls import TlsConfig, TlsStream
+from .client import (
+    WsClient,
+    WsHandshakeError,
+    _compute_accept,
+    _generate_ws_key,
+    _ws_url_to_http,
+)
+from .client_h2 import WsOverH2Stream, bootstrap_ws_over_h2
 
 
 # ── Wire choice codepoints ─────────────────────────────────────────────
@@ -111,11 +124,18 @@ struct WsAutoClientConfig(Copyable, Defaultable, Movable):
     candidates (e.g. ``"permessage-deflate; client_no_context_takeover"``).
     Empty list means "no extension request"."""
 
+    var tls_config: TlsConfig
+    """Caller-supplied TLS configuration. The dispatcher rewrites
+    :attr:`TlsConfig.alpn` based on :attr:`prefer_h2` but
+    otherwise honours the verify-mode, CA-bundle, and mTLS
+    inputs as-is."""
+
     def __init__(out self):
         self.url = String("")
         self.prefer_h2 = True
         self.subprotocols = List[String]()
         self.extensions = List[String]()
+        self.tls_config = TlsConfig()
 
 
 # ── Decision function ──────────────────────────────────────────────────
@@ -144,8 +164,8 @@ def decide_wire(
       is ``h2``.
 
     The function is pure + testable without any I/O.  The runtime
-    dispatcher (deferred to the Track Q8 follow-up) plumbs the
-    real values from the TLS + h2 layers into this call.
+    dispatcher (:meth:`WsAutoClient.connect`) plumbs the real
+    values from the TLS + h2 layers into this call.
     """
     if url_scheme == "ws":
         return WsWireChoice.HTTP_1_1
@@ -164,6 +184,41 @@ def decide_wire(
     return WsWireChoice.FAILED
 
 
+# ── Internal h2 carrier ────────────────────────────────────────────────
+
+
+struct _WsAutoH2Carrier(Movable):
+    """Owns the live h2 carriers an h2-path connect produces.
+
+    Holds the TLS stream the h2 connection rides on, the
+    :class:`Http2ClientConnection` driver, the
+    :class:`WsOverH2Stream` adapter, the stream id allocated for
+    the Extended CONNECT tunnel, and the ``Sec-WebSocket-Key``
+    used in the bootstrap headers (kept around so tests + future
+    debug surface can compare against the expected ``Accept``).
+    """
+
+    var tls: TlsStream
+    var h2: Http2ClientConnection
+    var stream: WsOverH2Stream
+    var stream_id: Int
+    var sec_websocket_key: String
+
+    def __init__(
+        out self,
+        var tls: TlsStream,
+        var h2: Http2ClientConnection,
+        var stream: WsOverH2Stream,
+        stream_id: Int,
+        sec_websocket_key: String,
+    ):
+        self.tls = tls^
+        self.h2 = h2^
+        self.stream = stream^
+        self.stream_id = stream_id
+        self.sec_websocket_key = sec_websocket_key
+
+
 # ── Client carrier ─────────────────────────────────────────────────────
 
 
@@ -176,9 +231,12 @@ struct WsAutoClient(Movable):
     :class:`flare.ws.WsOverH2Stream` (h2 path).  The dispatcher
     is the small piece on top that picks between them.
 
-    Today :meth:`connect` raises with a clear pointer at the
-    Track Q8 follow-up commit; the per-property accessors +
-    :func:`decide_wire` are fully exercised by the test corpus.
+    Call :meth:`connect` to drive the TLS handshake + ALPN
+    inspection + per-path bootstrap; query :attr:`chosen_wire`
+    + :meth:`is_h2_path` afterwards to learn which carrier won.
+    The path-specific handle is accessible via
+    :meth:`take_h1_client` (HTTP/1.1) or :meth:`take_h2_carrier`
+    (HTTP/2).
     """
 
     var config: WsAutoClientConfig
@@ -193,10 +251,22 @@ struct WsAutoClient(Movable):
     :attr:`chosen_wire` transitions to :data:`WsWireChoice.FAILED`.
     """
 
-    def __init__(out self, config: WsAutoClientConfig):
-        self.config = config.copy()
+    var _h1_client: Optional[WsClient]
+    """The HTTP/1.1 WS carrier when the dispatcher picked the h1
+    path. Populated by :meth:`connect`; consumed by
+    :meth:`take_h1_client`."""
+
+    var _h2_carrier: Optional[_WsAutoH2Carrier]
+    """The HTTP/2 Extended CONNECT carrier when the dispatcher
+    picked the h2 path. Populated by :meth:`connect`; consumed
+    by :meth:`take_h2_carrier`."""
+
+    def __init__(out self, var config: WsAutoClientConfig):
+        self.config = config^
         self.chosen_wire = WsWireChoice.UNDETERMINED
         self.last_error = String("")
+        self._h1_client = None
+        self._h2_carrier = None
 
     def url_scheme(self) -> String:
         """Return ``"ws"`` or ``"wss"`` -- the parsed scheme from
@@ -224,20 +294,263 @@ struct WsAutoClient(Movable):
                 return String("ws")
         return String("")
 
-    def connect(mut self) raises:
-        """Run the connection sequence: TLS handshake, ALPN
-        negotiation, h2 SETTINGS exchange, wire selection, then
-        the per-wire bootstrap.
+    # ── Public state accessors ─────────────────────────────────────────
 
-        Today raises pending the Track Q8 follow-up that wires
-        :class:`flare.ws.WsClient` + :class:`flare.ws.WsOverH2Stream`
-        through this carrier.
+    def is_h1_path(self) -> Bool:
+        """``True`` after a successful connect picked HTTP/1.1.
+        Pairs with :meth:`take_h1_client`."""
+        return self.chosen_wire == WsWireChoice.HTTP_1_1
+
+    def is_h2_path(self) -> Bool:
+        """``True`` after a successful connect picked HTTP/2
+        Extended CONNECT. Pairs with :meth:`take_h2_carrier`."""
+        return self.chosen_wire == WsWireChoice.HTTP_2
+
+    def take_h1_client(mut self) raises -> WsClient:
+        """Consume + return the HTTP/1.1 :class:`WsClient` the
+        dispatcher opened. Must only be called after a successful
+        connect that left :attr:`chosen_wire` at HTTP_1_1; raises
+        otherwise. Idempotently transitions the dispatcher into a
+        consumed state -- subsequent calls raise."""
+        if self.chosen_wire != WsWireChoice.HTTP_1_1:
+            raise Error(
+                "WsAutoClient.take_h1_client: dispatcher did not pick"
+                " the HTTP/1.1 path (chosen_wire = "
+                + String(self.chosen_wire)
+                + ")"
+            )
+        if not self._h1_client:
+            raise Error(
+                "WsAutoClient.take_h1_client: HTTP/1.1 carrier already"
+                " consumed (idempotent guard)"
+            )
+        var carrier = self._h1_client.take()
+        self._h1_client = None
+        return carrier^
+
+    def take_h2_carrier(
+        mut self,
+    ) raises -> _WsAutoH2Carrier:
+        """Consume + return the h2 path carrier (TLS stream + h2
+        driver + WS-over-h2 adapter). Must only be called after a
+        successful connect that left :attr:`chosen_wire` at
+        HTTP_2; raises otherwise. Idempotently transitions the
+        dispatcher into a consumed state."""
+        if self.chosen_wire != WsWireChoice.HTTP_2:
+            raise Error(
+                "WsAutoClient.take_h2_carrier: dispatcher did not pick"
+                " the HTTP/2 path (chosen_wire = "
+                + String(self.chosen_wire)
+                + ")"
+            )
+        if not self._h2_carrier:
+            raise Error(
+                "WsAutoClient.take_h2_carrier: HTTP/2 carrier already"
+                " consumed (idempotent guard)"
+            )
+        var c = self._h2_carrier.take()
+        self._h2_carrier = None
+        return c^
+
+    # ── Connect ────────────────────────────────────────────────────────
+
+    def connect(mut self) raises:
+        """Run the runtime connection sequence:
+
+        1. Parse the URL scheme.
+        2. ``ws://``: open a cleartext :class:`WsClient` (no ALPN
+           involved). Sets :attr:`chosen_wire` to HTTP_1_1.
+        3. ``wss://`` + ``prefer_h2 = False``: open a TLS
+           :class:`WsClient` with ALPN ``["http/1.1"]``. Sets
+           :attr:`chosen_wire` to HTTP_1_1.
+        4. ``wss://`` + ``prefer_h2 = True``: open a TLS handshake
+           with ALPN ``["h2", "http/1.1"]``. Read
+           :meth:`TlsStream.alpn_selected`:
+
+           a. ``"h2"``: drive the h2 preface, wait for the peer's
+              SETTINGS frame, gate on
+              :meth:`Http2ClientConnection.peer_supports_extended_connect`,
+              bootstrap_ws_over_h2 on a fresh stream id, await
+              the server's :status = 200 response, and store the
+              h2 carrier. Sets :attr:`chosen_wire` to HTTP_2.
+
+           b. ``"http/1.1"`` or ``""`` (no ALPN extension): close
+              the discovery TLS handshake + open a fresh TLS
+              :class:`WsClient` advertising only ``http/1.1``.
+              Sets :attr:`chosen_wire` to HTTP_1_1.
+
+        On any failure :attr:`chosen_wire` flips to FAILED,
+        :attr:`last_error` records the failing message, and the
+        exception is re-raised.
         """
-        raise Error(
-            "WsAutoClient.connect: ALPN-driven runtime dispatch"
-            " not yet wired (Track Q8 follow-up commit). The"
-            " decision logic + the carrier shape are in place;"
-            " the runtime hand-off to WsClient / WsOverH2Stream"
-            " lands once the ALPN-aware h2 client open path is"
-            " plumbed through."
+        try:
+            self._connect_impl()
+        except e:
+            self.last_error = String(e)
+            self.chosen_wire = WsWireChoice.FAILED
+            raise e^
+
+    def _connect_impl(mut self) raises:
+        var scheme = self.url_scheme()
+        if scheme == "":
+            raise WsHandshakeError(
+                "WsAutoClient.connect: URL must start with ws:// or"
+                " wss://; got "
+                + self.config.url
+            )
+
+        if scheme == "ws":
+            var c = WsClient.connect(self.config.url)
+            self._h1_client = Optional[WsClient](c^)
+            self.chosen_wire = WsWireChoice.HTTP_1_1
+            return
+
+        if not self.config.prefer_h2:
+            var cfg = self.config.tls_config.copy()
+            cfg.alpn = List[String]()
+            cfg.alpn.append("http/1.1")
+            var c = WsClient.connect(self.config.url, cfg^)
+            self._h1_client = Optional[WsClient](c^)
+            self.chosen_wire = WsWireChoice.HTTP_1_1
+            return
+
+        var u = Url.parse(_ws_url_to_http(self.config.url))
+        var probe_cfg = self.config.tls_config.copy()
+        probe_cfg.alpn = List[String]()
+        probe_cfg.alpn.append("h2")
+        probe_cfg.alpn.append("http/1.1")
+        var tls = TlsStream.connect(u.host, u.port, probe_cfg^)
+        var alpn = tls.alpn_selected()
+
+        if alpn == "h2":
+            self._open_h2_path(tls^, u)
+            self.chosen_wire = WsWireChoice.HTTP_2
+            return
+
+        # ALPN not h2 -- close the probe TLS + reconnect on http/1.1.
+        # The reconnect costs a second TLS handshake but it's the
+        # cleanest split: WsClient.connect owns its TCP / TLS setup
+        # + its own response-line + Sec-WebSocket-Accept parse.
+        # Production callers that want zero-cost negotiation should
+        # set prefer_h2 = False up front when they know the peer
+        # only speaks h1.
+        _ = tls^
+        var h1_cfg = self.config.tls_config.copy()
+        h1_cfg.alpn = List[String]()
+        h1_cfg.alpn.append("http/1.1")
+        var c = WsClient.connect(self.config.url, h1_cfg^)
+        self._h1_client = Optional[WsClient](c^)
+        self.chosen_wire = WsWireChoice.HTTP_1_1
+
+    def _open_h2_path(mut self, var tls: TlsStream, u: Url) raises:
+        """Drive the h2 connection preface + SETTINGS exchange,
+        then bootstrap the Extended CONNECT stream. Stores the
+        resulting carrier on :attr:`_h2_carrier`.
+
+        Note: the dispatcher does not enable
+        ``SETTINGS_ENABLE_CONNECT_PROTOCOL`` on its OWN
+        :class:`Http2ClientConnection` (the client doesn't need
+        the bit -- only the server advertises it). We do require
+        the peer to advertise it; otherwise we raise so the
+        caller can retry with ``prefer_h2 = False``.
+        """
+        var h2 = Http2ClientConnection()
+
+        # 1. Flush the client preface + initial SETTINGS.
+        var preface = h2.drain()
+        if len(preface) > 0:
+            tls.write_all(Span[UInt8, _](preface))
+
+        # 2. Read until we observe the peer's initial SETTINGS.
+        #    A bounded read loop (16 iterations x 4096 bytes ~=
+        #    64 KiB max) is comfortably larger than any peer's
+        #    initial SETTINGS + identifying frames; the dispatcher
+        #    is intentionally non-clever here. If the peer never
+        #    sends SETTINGS the TLS read either returns 0 (clean
+        #    EOF) -- which we treat as a protocol error -- or
+        #    blocks until the OS times out.
+        var scratch = List[UInt8](capacity=4096)
+        scratch.resize(4096, 0)
+        # Bounded read loop: 16 iterations x 4096 bytes ~= 64 KiB
+        # cap is comfortably larger than any peer's
+        # initial SETTINGS + identifying frames. The h2 driver
+        # doesn't expose a "peer SETTINGS received" signal, so
+        # we use the latched `peer_supports_extended_connect`
+        # bit as our terminator. If after N iterations the bit
+        # is still false we treat that as "peer SETTINGS didn't
+        # advertise it" -- the loop's outer guard captures both
+        # "no SETTINGS yet" and "SETTINGS but no bit" cases.
+        var settings_advertised = False
+        for _ in range(16):
+            var n = tls.read(scratch.unsafe_ptr(), 4096)
+            if n <= 0:
+                break
+            h2.feed(Span[UInt8, _](scratch[:n]))
+            var auto_out = h2.drain()
+            if len(auto_out) > 0:
+                tls.write_all(Span[UInt8, _](auto_out))
+            if h2.peer_supports_extended_connect():
+                settings_advertised = True
+                break
+
+        if not settings_advertised:
+            raise WsHandshakeError(
+                "WsAutoClient: peer did not advertise"
+                " SETTINGS_ENABLE_CONNECT_PROTOCOL=1"
+                " (RFC 8441 §3) before bounded read budget"
+                " ran out; retry with prefer_h2 = False"
+            )
+
+        # 3. Bootstrap the Extended CONNECT stream.
+        var sid = h2.next_stream_id()
+        var ws_key = _generate_ws_key()
+        var authority = u.host
+        if u.port != UInt16(443):
+            authority = authority + ":" + String(Int(u.port))
+        bootstrap_ws_over_h2(
+            h2,
+            sid,
+            authority,
+            u.request_target(),
+            ws_key,
+            String(""),
+            String(""),
+            String("https"),
+        )
+        var post_bootstrap = h2.drain()
+        if len(post_bootstrap) > 0:
+            tls.write_all(Span[UInt8, _](post_bootstrap))
+
+        # 4. Read until the server responds with HEADERS on this
+        #    stream. Per RFC 8441 §5.2 the server confirms the
+        #    tunnel with a 2xx response.
+        var response_ready = False
+        for _ in range(32):
+            var n = tls.read(scratch.unsafe_ptr(), 4096)
+            if n <= 0:
+                break
+            h2.feed(Span[UInt8, _](scratch[:n]))
+            var auto_out = h2.drain()
+            if len(auto_out) > 0:
+                tls.write_all(Span[UInt8, _](auto_out))
+            if h2.response_ready(sid):
+                response_ready = True
+                break
+        if not response_ready:
+            raise WsHandshakeError(
+                "WsAutoClient: timed out waiting for Extended CONNECT"
+                " response on stream "
+                + String(sid)
+            )
+
+        var resp = h2.take_response(sid)
+        if resp.status < 200 or resp.status >= 300:
+            raise WsHandshakeError(
+                "WsAutoClient: Extended CONNECT rejected, status = "
+                + String(resp.status)
+            )
+
+        var stream = WsOverH2Stream(sid)
+        self._h2_carrier = Optional[_WsAutoH2Carrier](
+            _WsAutoH2Carrier(tls^, h2^, stream^, sid, ws_key)
         )

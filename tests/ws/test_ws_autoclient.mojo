@@ -1,14 +1,18 @@
 """Unit tests for the WS ALPN-driven auto-dispatcher
-(``flare.ws.auto_client`` -- Track Q8 scaffold).
+(``flare.ws.auto_client``).
 
 The decision function :func:`decide_wire` is the pure piece the
 dispatcher consults after the TLS handshake completes; this
-suite pins every observable outcome at the byte level.  The
-runtime hand-off to :class:`flare.ws.WsClient` /
-:class:`flare.ws.WsOverH2Stream` ships in the Track Q8 follow-up;
-:meth:`WsAutoClient.connect` raises with a clear message today.
+suite pins every observable outcome at the byte level. The
+runtime hand-off (Track Q8-W commit 1/2) is now wired:
+:meth:`WsAutoClient.connect` drives a real TLS handshake, the
+h2 preface + SETTINGS exchange when ALPN selects ``h2``, the
+Extended CONNECT bootstrap, and the per-path carrier storage.
+The I/O-touching integration tests over loopback TLS land in
+Track Q8-W commit 2/2; this file pins the no-I/O decision
+matrix + the error surfaces of the runtime call.
 
-The 12 test cases:
+The 13 test cases:
 
 1.  `prefer_h2 = True` default, with the runtime hint matrix
     that flows through the pure decision function.
@@ -24,8 +28,11 @@ The 12 test cases:
 9.  Garbage URL scheme -> FAILED.
 10. :meth:`WsAutoClient.url_scheme` parses ``wss://...``.
 11. :meth:`WsAutoClient.url_scheme` parses ``ws://...``.
-12. :meth:`WsAutoClient.connect` raises pending the Track Q8
-    follow-up commit.
+12. :meth:`WsAutoClient.connect` against an unreachable host
+    surfaces a clear error + leaves :attr:`chosen_wire` at
+    FAILED (the Track Q8-W commit 1/2 runtime surface).
+13. :meth:`take_h1_client` / :meth:`take_h2_carrier` raise
+    when the dispatcher hasn't picked the matching path.
 """
 
 from std.testing import assert_equal, assert_false, assert_true
@@ -134,12 +141,17 @@ def test_url_scheme_parses_ws() raises:
     assert_equal(auto.url_scheme(), String("ws"))
 
 
-def test_connect_raises_pending_wiring() raises:
-    """:meth:`WsAutoClient.connect` raises with a Track Q8 follow-up
-    pointer.  The decision logic + carrier are in place;
-    plumbing through to :class:`flare.ws.WsClient` /
-    :class:`flare.ws.WsOverH2Stream` is the focused follow-up."""
-    var cfg = _config_for(String("wss://example.com/chat"))
+def test_connect_unreachable_host_surfaces_failure() raises:
+    """The runtime hand-off lives in
+    :meth:`WsAutoClient.connect` (Track Q8-W commit 1/2). With
+    no listener at the configured host the DNS / TCP / TLS
+    layers raise before the dispatcher reaches any wire choice;
+    :attr:`chosen_wire` lands on :data:`WsWireChoice.FAILED`
+    and :attr:`last_error` carries the failing message."""
+    # Use a reserved-for-documentation literal IP that's
+    # guaranteed not to host a TLS responder on 443 (RFC 5737
+    # 203.0.113.0/24 is the TEST-NET-3 reserved range).
+    var cfg = _config_for(String("wss://203.0.113.1/chat"))
     var auto = WsAutoClient(cfg^)
     var raised = False
     try:
@@ -147,6 +159,41 @@ def test_connect_raises_pending_wiring() raises:
     except:
         raised = True
     assert_true(raised, "expected WsAutoClient.connect to raise")
+    assert_equal(auto.chosen_wire, WsWireChoice.FAILED)
+    assert_true(
+        auto.last_error.byte_length() > 0,
+        "expected last_error to be populated on FAILED",
+    )
+
+
+def test_take_methods_guard_state() raises:
+    """``take_h1_client`` and ``take_h2_carrier`` raise when the
+    dispatcher hasn't picked the matching path. The carrier
+    state machine is one-shot: each take call consumes the
+    underlying handle + idempotently transitions to
+    consumed-state."""
+    var cfg = _config_for(String("wss://example.com/chat"))
+    var auto = WsAutoClient(cfg^)
+    var raised_h1 = False
+    try:
+        _ = auto.take_h1_client()
+    except:
+        raised_h1 = True
+    assert_true(
+        raised_h1,
+        "expected take_h1_client to raise on UNDETERMINED carrier",
+    )
+    var raised_h2 = False
+    try:
+        _ = auto.take_h2_carrier()
+    except:
+        raised_h2 = True
+    assert_true(
+        raised_h2,
+        "expected take_h2_carrier to raise on UNDETERMINED carrier",
+    )
+    assert_false(auto.is_h1_path())
+    assert_false(auto.is_h2_path())
 
 
 def main() raises:
@@ -162,5 +209,6 @@ def main() raises:
     test_decide_wire_invalid_scheme_fails()
     test_url_scheme_parses_wss()
     test_url_scheme_parses_ws()
-    test_connect_raises_pending_wiring()
-    print("test_ws_autoclient: 13 passed")
+    test_connect_unreachable_host_surfaces_failure()
+    test_take_methods_guard_state()
+    print("test_ws_autoclient: 14 passed")
