@@ -68,10 +68,20 @@ from .protection import unprotect_initial_packet
 from .state import (
     Connection,
     ConnectionEvents,
+    CONN_STATE_CLOSED,
+    CONN_STATE_DRAINING,
     empty_events,
     handle_frame_buf,
     new_connection,
 )
+from .timers import (
+    TIMER_KIND_ACK_DELAY,
+    TIMER_KIND_IDLE,
+    TIMER_KIND_PTO,
+    decode_timer_token,
+    encode_timer_token,
+)
+from ..runtime.timer_wheel import TimerWheel
 from ..tls.rustls_quic import RustlsQuicConfig
 
 
@@ -211,6 +221,23 @@ struct QuicConnection(Copyable, Movable):
     / DRAINING / CLOSED so the reactor's dispatch table can
     sweep the entry."""
 
+    var idle_timer_id: UInt64
+    """Timer-wheel id of the currently-scheduled idle-timeout
+    entry (0 if none). Each `handle_packet` call cancels the
+    previous idle timer and schedules a fresh one. Stored here
+    so the reactor can find and cancel it on connection close."""
+
+    var pto_timer_id: UInt64
+    """Timer-wheel id of the currently-scheduled PTO (probe
+    timeout) entry. Re-armed on every ack-eliciting send +
+    cleared on every ACK that retires the relevant packet
+    number space (commit 4/5 of Track Q3-W)."""
+
+    var ack_delay_timer_id: UInt64
+    """Timer-wheel id of the currently-deferred ACK timer. Set
+    when ``conn.ack_pending`` flips True; cleared when the ACK
+    is actually emitted (commit 4/5 of Track Q3-W)."""
+
     def __init__(
         out self,
         local_cid: ConnectionId,
@@ -224,6 +251,37 @@ struct QuicConnection(Copyable, Movable):
         self.peer_cid = peer_cid.copy()
         self.cc_choice = cc_choice
         self.alive = True
+        self.idle_timer_id = UInt64(0)
+        self.pto_timer_id = UInt64(0)
+        self.ack_delay_timer_id = UInt64(0)
+
+    def on_idle_expired(mut self):
+        """RFC 9000 §10.1.2 -- silent close on idle timeout.
+
+        The state machine advances to ``CLOSED`` without emitting
+        a CONNECTION_CLOSE frame (the peer must come to the same
+        conclusion via its own idle timer). The reactor sweeps
+        the slot on the next tick.
+        """
+        self.alive = False
+        self.conn.state = CONN_STATE_CLOSED
+        self.idle_timer_id = UInt64(0)
+
+    def on_pto_expired(mut self):
+        """RFC 9002 §6.2 -- the PTO timer fired. The state
+        machine flags that a probe packet is owed; the egress
+        path (commit 4/5 of Track Q3-W) sends one or two PING /
+        PADDING packets so the peer's ACK recovers the lost
+        packet-number space."""
+        self.pto_timer_id = UInt64(0)
+        self.conn.ack_pending = True  # forces an ACK on the next send
+
+    def on_ack_delay_expired(mut self):
+        """RFC 9000 §13.2.1 -- the deferred-ACK timer fired.
+        The next send is forced to include the pending ACK so
+        the peer's RTT estimate stays current."""
+        self.ack_delay_timer_id = UInt64(0)
+        self.conn.ack_pending = True
 
     def handle_packet(
         mut self,
@@ -384,9 +442,17 @@ struct QuicListener(Movable):
     var connections: List[QuicConnection]
     """Connection slab. Per-connection state lives here; the
     :class:`ConnectionIdTable` maps each Connection ID to the
-    slot index. Slots are append-only in this commit; the
-    sweeper for closed connections lands with the timer-wheel
-    commit (3/5) of this track."""
+    slot index. Slots are append-only; the closed-slot sweeper
+    runs at the end of every :meth:`advance_timers` call so
+    timer-fired connections (idle, PTO-exhausted) get reaped
+    against the same monotonic clock the wheel uses."""
+    var timer_wheel: TimerWheel
+    """Per-listener :class:`flare.runtime.timer_wheel.TimerWheel`
+    driving PTO / idle / ack-delay timeouts (Track Q3-W commit
+    3/5). Each scheduled timer's token is
+    :func:`flare.quic.timers.encode_timer_token(kind, slot)`;
+    :meth:`advance_timers` dispatches each fired token to the
+    matching :class:`QuicConnection` callback."""
     var _socket: UdpSocket
     var _local_addr: SocketAddr
     var _stopping: Bool
@@ -405,6 +471,7 @@ struct QuicListener(Movable):
         self.config = config.copy()
         self.cid_table = ConnectionIdTable()
         self.connections = List[QuicConnection]()
+        self.timer_wheel = TimerWheel(now_ms=UInt64(0))
         self._socket = sock^
         self._local_addr = addr
         self._stopping = False
@@ -491,8 +558,12 @@ struct QuicListener(Movable):
 
         Other state-machine errors propagate to the caller so
         the reactor can log + close the connection.
+
+        On success also re-arms the per-connection idle timer
+        so the activity-based timeout window slides forward
+        (Track Q3-W commit 3/5).
         """
-        var now_us = UInt64(0)  # Wall-clock driven from commit 3/5
+        var now_us = UInt64(0)  # Wall-clock driven from commit 4/5
         var conn = self.connections[slot].copy()
         try:
             var _events = conn.handle_packet(datagram, now_us)
@@ -503,6 +574,7 @@ struct QuicListener(Movable):
             self.connections[slot] = conn^
             return
         self.connections[slot] = conn^
+        _ = self.schedule_idle_timeout(slot)
 
     def _dispatch_long(
         mut self, datagram: Span[UInt8, _], peer: SocketAddr
@@ -544,6 +616,10 @@ struct QuicListener(Movable):
         SHOULD choose its own SCID and switch to it on the
         server-side response; that follow-up is part of the
         per-packet wiring in commit 2/5 of this track.
+
+        Also arms the per-connection idle timeout (commit 3/5)
+        so a half-open handshake that never completes gets
+        reaped at ``max_idle_timeout_ms``.
         """
         var local_cid = lh.dcid.copy()
         var peer_cid = lh.scid.copy()
@@ -557,6 +633,7 @@ struct QuicListener(Movable):
         var slot = len(self.connections)
         self.connections.append(qc^)
         self.cid_table.register(cid_to_hex(local_cid), slot)
+        _ = self.schedule_idle_timeout(slot)
         return slot
 
     def tick(mut self, timeout_ms: Int = 100) raises -> Bool:
@@ -611,6 +688,108 @@ struct QuicListener(Movable):
         """Request the event loop to exit. Idempotent; safe to
         call from a signal handler (sets a single Bool flag)."""
         self._stopping = True
+
+    # -- Timer scheduling -----------------------------------------------
+
+    def schedule_idle_timeout(mut self, slot: Int) raises -> UInt64:
+        """Arm the idle timer for ``slot`` at
+        ``config.max_idle_timeout_ms`` from the current wheel
+        tick. Cancels the slot's previous idle timer if any so
+        every ``handle_packet`` only ever has one idle timer in
+        flight per connection.
+
+        Returns the new timer id (stored back into the slot's
+        :attr:`QuicConnection.idle_timer_id`).
+        """
+        if slot < 0 or slot >= len(self.connections):
+            raise Error(
+                "schedule_idle_timeout: slot " + String(slot) + " out of range"
+            )
+        var conn = self.connections[slot].copy()
+        if conn.idle_timer_id != UInt64(0):
+            _ = self.timer_wheel.cancel(conn.idle_timer_id)
+            conn.idle_timer_id = UInt64(0)
+        var token = encode_timer_token(TIMER_KIND_IDLE, slot)
+        var after_ms = Int(self.config.max_idle_timeout_ms)
+        var id = self.timer_wheel.schedule(after_ms=after_ms, token=token)
+        conn.idle_timer_id = id
+        self.connections[slot] = conn^
+        return id
+
+    def schedule_pto(mut self, slot: Int, after_ms: Int) raises -> UInt64:
+        """Arm the PTO probe-timer for ``slot``. Cancels any
+        existing PTO entry first so re-arming on every send
+        doesn't pile up wheel entries."""
+        if slot < 0 or slot >= len(self.connections):
+            raise Error("schedule_pto: slot " + String(slot) + " out of range")
+        var conn = self.connections[slot].copy()
+        if conn.pto_timer_id != UInt64(0):
+            _ = self.timer_wheel.cancel(conn.pto_timer_id)
+            conn.pto_timer_id = UInt64(0)
+        var token = encode_timer_token(TIMER_KIND_PTO, slot)
+        var id = self.timer_wheel.schedule(after_ms=after_ms, token=token)
+        conn.pto_timer_id = id
+        self.connections[slot] = conn^
+        return id
+
+    def schedule_ack_delay(mut self, slot: Int, after_ms: Int) raises -> UInt64:
+        """Arm the deferred-ACK timer for ``slot``. Idempotent
+        no-op if a deferred-ACK timer is already scheduled --
+        an in-flight deferred ACK should not be re-armed each
+        time another ack-eliciting packet arrives (the existing
+        timer already covers the deadline)."""
+        if slot < 0 or slot >= len(self.connections):
+            raise Error(
+                "schedule_ack_delay: slot " + String(slot) + " out of range"
+            )
+        var conn = self.connections[slot].copy()
+        if conn.ack_delay_timer_id != UInt64(0):
+            return conn.ack_delay_timer_id
+        var token = encode_timer_token(TIMER_KIND_ACK_DELAY, slot)
+        var id = self.timer_wheel.schedule(after_ms=after_ms, token=token)
+        conn.ack_delay_timer_id = id
+        self.connections[slot] = conn^
+        return id
+
+    def advance_timers(mut self, now_ms: UInt64) raises -> Int:
+        """Advance the wheel to ``now_ms`` and dispatch every
+        fired token to the matching :class:`QuicConnection`
+        callback (PTO / IDLE / ACK_DELAY per
+        :mod:`flare.quic.timers`). Returns the number of tokens
+        dispatched.
+
+        Also sweeps the CID table for any connections whose
+        ``alive`` flag flipped False during dispatch (idle
+        timeout, draining); their CIDs are retired so a stray
+        retransmit doesn't route to a dead slot.
+        """
+        var fired = List[UInt64]()
+        self.timer_wheel.advance(now_ms, fired)
+        for i in range(len(fired)):
+            var decoded = decode_timer_token(fired[i])
+            var slot = decoded.slot
+            if slot < 0 or slot >= len(self.connections):
+                continue
+            var conn = self.connections[slot].copy()
+            if decoded.kind == TIMER_KIND_IDLE:
+                conn.on_idle_expired()
+            elif decoded.kind == TIMER_KIND_PTO:
+                conn.on_pto_expired()
+            elif decoded.kind == TIMER_KIND_ACK_DELAY:
+                conn.on_ack_delay_expired()
+            self.connections[slot] = conn^
+            if not self.connections[slot].alive:
+                self._retire_slot_cids(slot)
+        return len(fired)
+
+    def _retire_slot_cids(mut self, slot: Int) raises:
+        """Drop every CID -> slot mapping that points at this
+        slot. Called when the slot's connection has closed so
+        late retransmits don't route to a dead slot."""
+        if slot < 0 or slot >= len(self.connections):
+            return
+        var cid_hex = cid_to_hex(self.connections[slot].local_cid)
+        self.cid_table.retire(cid_hex)
 
     def close(mut self):
         """Close the underlying UDP socket. Idempotent. The
