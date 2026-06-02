@@ -1,0 +1,5 @@
+target = flare-h3
+flare = 0.8.0
+mojo = via pixi-managed toolchain (modular)
+quic_crypto_backend = OpenSslQuicCrypto (libcrypto via flare/tls/ffi/openssl_wrapper.cpp)
+tls_backend = rustls 0.23 (libflare_rustls.so via flare/tls/ffi/rustls_wrapper/)

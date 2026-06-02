@@ -113,7 +113,11 @@ sysroot_linux-64 = "2.34.*"
 # Run with: pixi run --environment bench <task>
 bench-vs-baseline         = "bash benchmark/scripts/bench_vs_baseline.sh"
 bench-vs-baseline-quick   = "bash benchmark/scripts/bench_vs_baseline.sh --only=flare,go_nethttp --configs=throughput"
-bench-h3                  = "bash benchmark/scripts/bench_h3.sh"  # Phase D Track Q7 HARD GATE -- exits with banner until h3 wiring lands
+bench-h3                  = "bash benchmark/scripts/bench_h3.sh"            # Track Q7-W commit 3/4 -- HTTP/3 throughput harness
+bench-h3-flare            = "bash benchmark/scripts/bench_h3.sh flare"      # flare h3 baseline only
+bench-h3-quinn            = "bash benchmark/scripts/bench_h3.sh quinn"      # quinn h3 baseline only
+bench-h3-quiche           = "bash benchmark/scripts/bench_h3.sh quiche"     # quiche h3 baseline only
+bench-h3-all              = "bash benchmark/scripts/bench_h3.sh all"        # flare + quinn + quiche back-to-back
 bench-build-quinn-h3      = "cargo build --release --locked --manifest-path benchmark/baselines/quinn/Cargo.toml"  # Track Q7-W commit 1/4 -- quinn HTTP/3 baseline
 bench-build-quiche-h3     = "cargo build --release --locked --manifest-path benchmark/baselines/quiche/Cargo.toml" # Track Q7-W commit 2/4 -- quiche HTTP/3 baseline
 bench-integrity-only      = "bash benchmark/scripts/_integrity_check.sh"
