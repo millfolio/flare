@@ -327,3 +327,285 @@ def can_send(state: CcState) -> Bool:
     """Whether the connection has any cwnd headroom left for a
     new MSS-sized packet."""
     return state.bytes_in_flight + state.mss <= state.cwnd_bytes
+
+
+# ── Congestion-controller trait + concrete carriers (Track P) ────────────
+
+
+trait CongestionController(Copyable, Movable):
+    """Pluggable per-connection congestion controller.
+
+    The QUIC server reactor monomorphizes over an implementation
+    of this trait so a single ``QuicConnection`` driver can run
+    CUBIC + HyStart++ in production and the deterministic RFC 9002
+    Appendix B Reno in tests / loss-recovery vector replay without
+    branching at runtime. Both impls own their own state carrier;
+    the trait surface is the entire API the reactor sees.
+
+    Implementations:
+
+    * :class:`CubicController` -- RFC 9438 CUBIC for QUIC plus
+      RFC 9406 HyStart++. Production default. Internally a thin
+      wrapper around :class:`CcState` and the existing pure-function
+      surface so the v0.8 cycle's numerics carry forward unchanged.
+    * :class:`RenoController` -- RFC 9002 Appendix B Reno. Test
+      default because the AIMD math is closed-form (no cubic root,
+      no smoothed-RTT EWMA in the friendliness path) so loss-
+      recovery vectors stay byte-stable across runs.
+
+    The reactor (Track Q3 of Phase D) selects the controller via
+    ``QuicServerConfig.cc_choice``; the choice is monomorphized at
+    bind time so there is no virtual dispatch on the hot path.
+    """
+
+    def on_packet_sent(mut self, bytes: UInt64):
+        """Update bytes-in-flight after sending ``bytes`` of payload."""
+        ...
+
+    def on_ack_received(
+        mut self, acked_bytes: UInt64, rtt_us: UInt64, now_us: UInt64
+    ) -> UInt64:
+        """Advance cwnd in response to an ACK.
+
+        ``acked_bytes`` is the in-flight payload the ACK clears;
+        ``rtt_us`` is the round-trip-time sample observed for the
+        ACK; ``now_us`` is the reactor's monotonic clock reading
+        at processing time. Returns the new cwnd in bytes.
+        """
+        ...
+
+    def on_packets_lost(mut self, lost_bytes: UInt64, now_us: UInt64) -> UInt64:
+        """Handle a packet-loss event covering ``lost_bytes`` of
+        payload. Returns the new cwnd in bytes.
+        """
+        ...
+
+    def cwnd_bytes(self) -> UInt64:
+        """Current congestion window in bytes."""
+        ...
+
+    def bytes_in_flight(self) -> UInt64:
+        """Bytes that have been sent but not yet acknowledged or
+        declared lost.
+        """
+        ...
+
+    def can_send(self) -> Bool:
+        """Whether the connection has any cwnd headroom left for
+        a new MSS-sized packet.
+        """
+        ...
+
+    def pacing_rate_bytes_per_second(self) -> UInt64:
+        """RFC 9002 §7.7 pacing rate. Returns 0 when smoothed RTT
+        is not yet known.
+        """
+        ...
+
+    def pacing_budget(self, elapsed_us: UInt64) -> UInt64:
+        """Bytes the sender may emit over an interval of
+        ``elapsed_us`` microseconds at the current pacing rate.
+        Falls back to cwnd-bound bursts when no rate is computable.
+        """
+        ...
+
+
+# Production controller -- thin wrapper over the existing
+# pure-function CUBIC + HyStart++ surface so v0.8 numerics carry
+# forward unchanged.
+
+
+struct CubicController(CongestionController, Copyable, Movable):
+    """RFC 9438 CUBIC + RFC 9406 HyStart++ congestion controller.
+
+    The production default. Wraps :class:`CcState` and delegates
+    every method to the corresponding pure-function entry point;
+    the trait shim is zero overhead after monomorphization.
+    """
+
+    var state: CcState
+
+    def __init__(out self, mss: UInt64 = DEFAULT_MSS_BYTES):
+        self.state = cc_init(mss)
+
+    def on_packet_sent(mut self, bytes: UInt64):
+        self.state.bytes_in_flight = self.state.bytes_in_flight + bytes
+
+    def on_ack_received(
+        mut self, acked_bytes: UInt64, rtt_us: UInt64, now_us: UInt64
+    ) -> UInt64:
+        return on_ack_received(self.state, acked_bytes, rtt_us, now_us)
+
+    def on_packets_lost(mut self, lost_bytes: UInt64, now_us: UInt64) -> UInt64:
+        return on_packets_lost(self.state, lost_bytes, now_us)
+
+    def cwnd_bytes(self) -> UInt64:
+        return self.state.cwnd_bytes
+
+    def bytes_in_flight(self) -> UInt64:
+        return self.state.bytes_in_flight
+
+    def can_send(self) -> Bool:
+        return (
+            self.state.bytes_in_flight + self.state.mss <= self.state.cwnd_bytes
+        )
+
+    def pacing_rate_bytes_per_second(self) -> UInt64:
+        return pacing_rate_bytes_per_second(self.state)
+
+    def pacing_budget(self, elapsed_us: UInt64) -> UInt64:
+        return pacing_budget(self.state, elapsed_us)
+
+
+# Test / fallback controller -- closed-form RFC 9002 Appendix B
+# Reno. Deterministic: AIMD math without smoothed-RTT in the
+# growth path, no HyStart++, no cubic root. Loss-recovery vectors
+# stay byte-stable across runs so the conformance corpus can pin
+# expected cwnd trajectories at the bit level.
+
+
+struct RenoController(CongestionController, Copyable, Movable):
+    """RFC 9002 Appendix B Reno congestion controller.
+
+    The test default. The slow-start phase grows cwnd by one MSS
+    per acknowledged MSS; congestion avoidance grows cwnd by
+    ``MSS * MSS / cwnd`` per acknowledged MSS (Reno AIMD). On
+    loss, cwnd is halved with the ``MIN_WINDOW_PACKETS`` floor
+    (RFC 9002 Appendix B.4); ssthresh follows the new cwnd.
+
+    The controller is deliberately spare: no HyStart++, no cubic,
+    no friendliness compromise. The intent is a deterministic
+    fallback whose state transitions are easy to assert against
+    in unit tests and conformance vectors. CUBIC remains the
+    production default; Reno is what the test harnesses pin.
+    """
+
+    var cwnd_bytes_value: UInt64
+    """Current congestion window in bytes."""
+
+    var ssthresh_bytes: UInt64
+    """Slow-start threshold in bytes. Starts at ``2^63 - 1`` so
+    the slow-start cwnd grows until the first loss event sets
+    ssthresh to half the pre-loss cwnd."""
+
+    var bytes_in_flight_value: UInt64
+    """Bytes sent but not yet acknowledged or declared lost."""
+
+    var smoothed_rtt_us: UInt64
+    """RFC 9002 §5.3 smoothed RTT (alpha = 1/8). 0 until the
+    first RTT sample arrives."""
+
+    var mss: UInt64
+    """UDP payload unit. Defaults to :data:`DEFAULT_MSS_BYTES`."""
+
+    var in_slow_start: Bool
+    """True until cwnd first reaches ssthresh or the first loss
+    event lands. Determines slow-start vs AIMD growth and the
+    slow-start pacing gain (1.25 vs 1.0)."""
+
+    def __init__(out self, mss: UInt64 = DEFAULT_MSS_BYTES):
+        self.cwnd_bytes_value = mss * INITIAL_WINDOW_PACKETS
+        self.ssthresh_bytes = UInt64((1 << 63) - 1)
+        self.bytes_in_flight_value = UInt64(0)
+        self.smoothed_rtt_us = UInt64(0)
+        self.mss = mss
+        self.in_slow_start = True
+
+    def on_packet_sent(mut self, bytes: UInt64):
+        self.bytes_in_flight_value = self.bytes_in_flight_value + bytes
+
+    def on_ack_received(
+        mut self, acked_bytes: UInt64, rtt_us: UInt64, now_us: UInt64
+    ) -> UInt64:
+        if self.bytes_in_flight_value >= acked_bytes:
+            self.bytes_in_flight_value = (
+                self.bytes_in_flight_value - acked_bytes
+            )
+        else:
+            self.bytes_in_flight_value = UInt64(0)
+        if rtt_us > UInt64(0):
+            if self.smoothed_rtt_us == UInt64(0):
+                self.smoothed_rtt_us = rtt_us
+            else:
+                self.smoothed_rtt_us = (
+                    (self.smoothed_rtt_us * UInt64(7)) + rtt_us
+                ) // UInt64(8)
+        if self.in_slow_start:
+            self.cwnd_bytes_value = self.cwnd_bytes_value + acked_bytes
+            if self.cwnd_bytes_value >= self.ssthresh_bytes:
+                self.in_slow_start = False
+            return self.cwnd_bytes_value
+        # AIMD congestion avoidance: cwnd += MSS * MSS / cwnd per ack.
+        if self.cwnd_bytes_value > UInt64(0):
+            var inc = (acked_bytes * self.mss) // self.cwnd_bytes_value
+            self.cwnd_bytes_value = self.cwnd_bytes_value + inc
+        return self.cwnd_bytes_value
+
+    def on_packets_lost(mut self, lost_bytes: UInt64, now_us: UInt64) -> UInt64:
+        if self.bytes_in_flight_value >= lost_bytes:
+            self.bytes_in_flight_value = self.bytes_in_flight_value - lost_bytes
+        else:
+            self.bytes_in_flight_value = UInt64(0)
+        # RFC 9002 Appendix B.4: cwnd /= 2, floor at MIN_WINDOW_PACKETS.
+        self.in_slow_start = False
+        var new_cwnd = self.cwnd_bytes_value // UInt64(2)
+        var min_cwnd = self.mss * MIN_WINDOW_PACKETS
+        if new_cwnd < min_cwnd:
+            new_cwnd = min_cwnd
+        self.cwnd_bytes_value = new_cwnd
+        self.ssthresh_bytes = new_cwnd
+        return self.cwnd_bytes_value
+
+    def cwnd_bytes(self) -> UInt64:
+        return self.cwnd_bytes_value
+
+    def bytes_in_flight(self) -> UInt64:
+        return self.bytes_in_flight_value
+
+    def can_send(self) -> Bool:
+        return self.bytes_in_flight_value + self.mss <= self.cwnd_bytes_value
+
+    def pacing_rate_bytes_per_second(self) -> UInt64:
+        if self.smoothed_rtt_us == UInt64(0):
+            return UInt64(0)
+        var num: UInt64
+        var den: UInt64
+        if self.in_slow_start:
+            num = PACING_GAIN_NUM
+            den = PACING_GAIN_DEN
+        else:
+            num = UInt64(1)
+            den = UInt64(1)
+        var rate_per_us = (self.cwnd_bytes_value * num) // (
+            self.smoothed_rtt_us * den
+        )
+        return rate_per_us * UInt64(1_000_000)
+
+    def pacing_budget(self, elapsed_us: UInt64) -> UInt64:
+        var rate = self.pacing_rate_bytes_per_second()
+        if rate == UInt64(0):
+            return self.cwnd_bytes_value
+        var budget = (rate * elapsed_us) // UInt64(1_000_000)
+        if budget > self.cwnd_bytes_value:
+            return self.cwnd_bytes_value
+        return budget
+
+
+# Reactor-facing selector. ``QuicServerConfig.cc_choice`` carries
+# one of these comptime integers; the bind path picks the matching
+# concrete controller and monomorphizes from there.
+
+
+struct CcChoice:
+    """Production vs test congestion-controller selector.
+
+    The QUIC server reactor reads :attr:`QuicServerConfig.cc_choice`
+    at bind time and routes through the matching controller without
+    runtime dispatch.
+    """
+
+    comptime CUBIC: Int = 0
+    """Production default -- :class:`CubicController`."""
+
+    comptime RENO: Int = 1
+    """Test / deterministic default -- :class:`RenoController`."""
