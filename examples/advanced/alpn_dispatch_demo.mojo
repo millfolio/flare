@@ -30,6 +30,9 @@ from flare.http.alpn_dispatch import (
     negotiate_alpn,
     wire_protocol_name,
 )
+from flare.http.server import HttpServer
+from flare.net import IpAddr, SocketAddr
+from flare.quic import QuicServerConfig
 
 
 def _print_dispatch(label: String, protocol: Int):
@@ -95,3 +98,36 @@ def main() raises:
     var pick = negotiate_alpn(weird_client, server_supports)
     if pick == "":
         print("No overlap -> reactor closes connection with TLS alert")
+    print()
+
+    # Track Q5-W: HttpServer.route_alpn cross-checks the
+    # negotiated ALPN against which listeners the server has
+    # bound. A TCP-only server raises on "h3"; the bind_with_h3
+    # variant accepts it.
+    print("== HttpServer.route_alpn cross-checked routing ==")
+    var tcp_only = HttpServer.bind(SocketAddr(IpAddr.localhost(), UInt16(0)))
+    print(
+        "    tcp-only server advertises:", tcp_only.advertised_alpn_protocols()
+    )
+    print(
+        "    tcp-only route_alpn('h2') ->",
+        wire_protocol_name(tcp_only.route_alpn(String(ALPN_HTTP_2))),
+    )
+    var raised_on_h3 = False
+    try:
+        var _w = tcp_only.route_alpn(String(ALPN_HTTP_3))
+    except _:
+        raised_on_h3 = True
+    print("    tcp-only route_alpn('h3') raises:", raised_on_h3)
+
+    var udp_cfg = QuicServerConfig()
+    udp_cfg.host = String("127.0.0.1")
+    udp_cfg.port = UInt16(0)
+    var h3_srv = HttpServer.bind_with_h3(
+        SocketAddr(IpAddr.localhost(), UInt16(0)), udp_cfg^
+    )
+    print("    h3 server advertises:", h3_srv.advertised_alpn_protocols())
+    print(
+        "    h3 server route_alpn('h3') ->",
+        wire_protocol_name(h3_srv.route_alpn(String(ALPN_HTTP_3))),
+    )
