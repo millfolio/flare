@@ -53,6 +53,18 @@ References:
 from std.collections import Dict, List, Optional
 from std.memory import Span
 
+from flare.h3.frame import (
+    H3_FRAME_TYPE_GOAWAY,
+    H3_FRAME_TYPE_SETTINGS,
+    H3_SETTINGS_ENABLE_CONNECT_PROTOCOL,
+    H3_SETTINGS_MAX_FIELD_SECTION_SIZE,
+    H3_SETTINGS_QPACK_BLOCKED_STREAMS,
+    H3_SETTINGS_QPACK_MAX_TABLE_CAPACITY,
+    H3Setting,
+    decode_h3_settings,
+    encode_h3_frame,
+    encode_h3_settings,
+)
 from flare.h3.request_reader import (
     H3_REQUEST_STATE_DONE,
     H3RequestEventHandler,
@@ -67,6 +79,7 @@ from flare.h3.response_writer import (
 from flare.http.request import Request
 from flare.http.response import Response
 from flare.qpack import QpackHeader
+from flare.quic.varint import decode_varint, encode_varint
 
 
 # ── Unidirectional stream type codepoints (RFC 9114 §6.2) ───────────────
@@ -386,6 +399,56 @@ struct H3Connection(Defaultable, Movable):
     """QUIC stream ID of the locally-opened QPACK decoder
     stream. -1 in static-only mode."""
 
+    var peer_control_stream_id: Int
+    """QUIC stream ID of the peer's control stream once observed.
+    -1 until the peer's uni-stream type prefix (0x00) is read.
+    RFC 9114 §6.2.1: at most one peer control stream per
+    direction; a second control stream is H3_STREAM_CREATION_ERROR."""
+
+    var peer_qpack_encoder_stream_id: Int
+    """RFC 9204 §4.2 -- peer's QPACK encoder uni-stream. -1 until
+    the type prefix (0x02) arrives."""
+
+    var peer_qpack_decoder_stream_id: Int
+    """RFC 9204 §4.2 -- peer's QPACK decoder uni-stream. -1 until
+    the type prefix (0x03) arrives."""
+
+    var peer_settings_max_field_section_size: UInt64
+    """RFC 9114 §7.2.4.2 -- peer-advertised maximum field section
+    size. UINT64_MAX until the peer's SETTINGS frame arrives."""
+
+    var peer_settings_qpack_max_table_capacity: UInt64
+    """RFC 9204 §3.2.2 -- peer-advertised QPACK dynamic-table
+    capacity. 0 until the peer's SETTINGS frame arrives + only
+    non-zero if the peer opts into dynamic-table inserts."""
+
+    var peer_settings_qpack_blocked_streams: UInt64
+    """RFC 9204 §3.2.3 -- peer-advertised blocked-streams budget.
+    0 until the peer's SETTINGS frame arrives."""
+
+    var peer_settings_enable_connect_protocol: Bool
+    """RFC 9220 §3 -- whether the peer advertises CONNECT-
+    Protocol support."""
+
+    var peer_goaway_max_stream_id: UInt64
+    """RFC 9114 §5.2 -- peer-emitted GOAWAY identifier. UINT64_MAX
+    means no GOAWAY has arrived yet; once a GOAWAY arrives this
+    holds the maximum stream id the peer will accept. Stream ids
+    >= this value are aborted by the H3 layer."""
+
+    var peer_uni_buffers: Dict[Int, List[UInt8]]
+    """Per-uni-stream inbound buffer. The stream-type varint may
+    span multiple chunks (it's at most 8 bytes but the QUIC
+    layer may split smaller); we buffer until the type is
+    resolvable. Once resolved, the buffer carries the remainder
+    of the stream payload."""
+
+    var peer_uni_kinds: Dict[Int, Int]
+    """Per-uni-stream resolved type: 0 (control), 1 (push),
+    2 (qpack-enc), 3 (qpack-dec), -1 (unknown grease /
+    reserved). Empty means the type varint has not been
+    resolved yet on that stream."""
+
     def __init__(out self):
         self.config = H3ConnectionConfig()
         self.peer_settings_received = False
@@ -394,6 +457,16 @@ struct H3Connection(Defaultable, Movable):
         self.control_stream_id = -1
         self.qpack_encoder_stream_id = -1
         self.qpack_decoder_stream_id = -1
+        self.peer_control_stream_id = -1
+        self.peer_qpack_encoder_stream_id = -1
+        self.peer_qpack_decoder_stream_id = -1
+        self.peer_settings_max_field_section_size = UInt64((1 << 63) - 1)
+        self.peer_settings_qpack_max_table_capacity = UInt64(0)
+        self.peer_settings_qpack_blocked_streams = UInt64(0)
+        self.peer_settings_enable_connect_protocol = False
+        self.peer_goaway_max_stream_id = UInt64((1 << 63) - 1)
+        self.peer_uni_buffers = Dict[Int, List[UInt8]]()
+        self.peer_uni_kinds = Dict[Int, Int]()
 
     @staticmethod
     def with_config(config: H3ConnectionConfig) -> Self:
@@ -659,6 +732,251 @@ struct H3Connection(Defaultable, Movable):
             encode_response_data(Span[UInt8, _](response.body), state.outbox)
         state.response_emitted = True
         self.streams[stream_id] = state^
+
+    # -- Unidirectional stream type dispatch (RFC 9114 §6.2) ----------
+
+    def feed_uni_stream_chunk(
+        mut self, stream_id: Int, var chunk: List[UInt8]
+    ) raises:
+        """Feed reassembled bytes from a peer-initiated
+        unidirectional QUIC stream into the H3 driver.
+
+        The first varint on each uni stream is the stream-type
+        codepoint (RFC 9114 §6.2). Once resolved, the driver
+        dispatches subsequent bytes to the matching state
+        machine:
+
+        * 0x00 (Control) -- parses SETTINGS first, then
+          GOAWAY / MAX_PUSH_ID over the stream's lifetime.
+        * 0x01 (Push) -- the server records but ignores the
+          stream (push is deprecated as of RFC 9114 revision
+          9; the reactor STOP_SENDINGs at the QUIC layer).
+        * 0x02 (QPACK encoder) -- captured for the dynamic-
+          table follow-up; bytes sink in static-only mode.
+        * 0x03 (QPACK decoder) -- captured but unused (we
+          never emit dynamic-table inserts).
+
+        The stream-type varint may span multiple chunks (it is
+        at most 8 bytes per RFC 9000 §16). The driver buffers
+        until the type is resolvable + drains the buffer once
+        resolution succeeds.
+        """
+        var buf = List[UInt8]()
+        if stream_id in self.peer_uni_buffers:
+            buf = self.peer_uni_buffers.pop(stream_id)
+        for i in range(len(chunk)):
+            buf.append(chunk[i])
+
+        var kind: Int
+        if stream_id in self.peer_uni_kinds:
+            kind = self.peer_uni_kinds[stream_id]
+        else:
+            # Try to decode the type varint. NEEDS_MORE buffers
+            # for the next chunk; structural errors (duplicate
+            # control stream) propagate to the reactor.
+            var type_consumed: Int
+            var type_value: UInt64
+            try:
+                var v = decode_varint(Span[UInt8, _](buf))
+                type_consumed = v.consumed
+                type_value = v.value
+            except _:
+                self.peer_uni_buffers[stream_id] = buf^
+                return
+            kind = self._classify_uni_kind(type_value, stream_id)
+            self.peer_uni_kinds[stream_id] = kind
+            var rest = List[UInt8](capacity=len(buf) - type_consumed)
+            for k in range(type_consumed, len(buf)):
+                rest.append(buf[k])
+            buf = rest^
+
+        if kind == H3StreamType.CONTROL:
+            self._feed_peer_control_stream(buf^)
+        elif kind == H3StreamType.QPACK_ENCODER:
+            pass
+        elif kind == H3StreamType.QPACK_DECODER:
+            pass
+        elif kind == H3StreamType.PUSH:
+            pass
+        else:
+            pass
+
+    @always_inline
+    def _classify_uni_kind(
+        mut self, type_code: UInt64, stream_id: Int
+    ) raises -> Int:
+        """Map a varint stream-type code to the kind id stored
+        in :attr:`peer_uni_kinds`. Also records the peer's
+        stream IDs (control / qpack-enc / qpack-dec) for the
+        reactor's duplicate-stream check."""
+        if type_code == UInt64(H3StreamType.CONTROL):
+            if self.peer_control_stream_id >= 0:
+                raise Error(
+                    "h3 server: peer opened a second control stream "
+                    "(RFC 9114 6.2.1 H3_STREAM_CREATION_ERROR)"
+                )
+            self.peer_control_stream_id = stream_id
+            return H3StreamType.CONTROL
+        if type_code == UInt64(H3StreamType.PUSH):
+            return H3StreamType.PUSH
+        if type_code == UInt64(H3StreamType.QPACK_ENCODER):
+            self.peer_qpack_encoder_stream_id = stream_id
+            return H3StreamType.QPACK_ENCODER
+        if type_code == UInt64(H3StreamType.QPACK_DECODER):
+            self.peer_qpack_decoder_stream_id = stream_id
+            return H3StreamType.QPACK_DECODER
+        return -1
+
+    def _feed_peer_control_stream(mut self, var bytes: List[UInt8]) raises:
+        """Parse one or more SETTINGS / GOAWAY / MAX_PUSH_ID
+        frames from the peer's control stream. RFC 9114 §7.2.4:
+        SETTINGS MUST be the first frame; receiving anything
+        else first is H3_MISSING_SETTINGS. Subsequent SETTINGS
+        frames are H3_FRAME_UNEXPECTED. GOAWAY is allowed any
+        time after the first SETTINGS."""
+        var cursor = 0
+        while cursor < len(bytes):
+            var view = Span[UInt8, _](bytes[cursor:])
+            var type_var = decode_varint(view)
+            if type_var.consumed >= len(view):
+                break
+            var rest = view[type_var.consumed :]
+            var len_var = decode_varint(rest)
+            var header_size = type_var.consumed + len_var.consumed
+            var payload_size = Int(len_var.value)
+            if header_size + payload_size > len(view):
+                break
+            var payload_start = cursor + header_size
+            var payload_end = payload_start + payload_size
+            var payload = Span[UInt8, _](bytes[payload_start:payload_end])
+            self._dispatch_control_frame(type_var.value, payload)
+            cursor = payload_end
+        if cursor < len(bytes):
+            var carry = List[UInt8](capacity=len(bytes) - cursor)
+            for k in range(cursor, len(bytes)):
+                carry.append(bytes[k])
+            self.peer_uni_buffers[self.peer_control_stream_id] = carry^
+
+    def _dispatch_control_frame(
+        mut self, frame_type: UInt64, payload: Span[UInt8, _]
+    ) raises:
+        """Apply one parsed control-stream frame to the driver
+        state. RFC 9114 enforces:
+
+        * SETTINGS is the first frame.
+        * SETTINGS twice on the same stream -> H3_FRAME_UNEXPECTED.
+        * Any other frame before SETTINGS -> H3_MISSING_SETTINGS.
+        * GOAWAY may arrive after SETTINGS; subsequent GOAWAYs
+          must monotonically decrease (RFC 9114 §5.2).
+        """
+        if frame_type == H3_FRAME_TYPE_SETTINGS:
+            if self.peer_settings_received:
+                raise Error(
+                    "h3 server: peer sent SETTINGS twice "
+                    "(RFC 9114 7.2.4 H3_FRAME_UNEXPECTED)"
+                )
+            var settings = decode_h3_settings(payload)
+            self._apply_peer_settings(settings^)
+            self.peer_settings_received = True
+            return
+        if not self.peer_settings_received:
+            raise Error(
+                "h3 server: control-stream frame "
+                + String(frame_type)
+                + " before SETTINGS (RFC 9114 7.2.4 H3_MISSING_SETTINGS)"
+            )
+        if frame_type == H3_FRAME_TYPE_GOAWAY:
+            if len(payload) == 0:
+                raise Error("h3 server: empty GOAWAY payload")
+            var goaway_id = decode_varint(payload)
+            if (
+                self.peer_goaway_max_stream_id != UInt64((1 << 63) - 1)
+                and goaway_id.value > self.peer_goaway_max_stream_id
+            ):
+                raise Error(
+                    "h3 server: peer GOAWAY id increased "
+                    "(RFC 9114 5.2 forbids monotonic increase)"
+                )
+            self.peer_goaway_max_stream_id = goaway_id.value
+            return
+
+    def _apply_peer_settings(mut self, var settings: List[H3Setting]) raises:
+        """Update the connection's view of the peer's announced
+        SETTINGS. Unknown settings identifiers are ignored per
+        RFC 9114 §7.2.4.1; the codec already rejects malformed
+        pairs."""
+        for i in range(len(settings)):
+            var id_ = settings[i].identifier
+            var v = settings[i].value
+            if id_ == H3_SETTINGS_MAX_FIELD_SECTION_SIZE:
+                self.peer_settings_max_field_section_size = v
+            elif id_ == H3_SETTINGS_QPACK_MAX_TABLE_CAPACITY:
+                self.peer_settings_qpack_max_table_capacity = v
+            elif id_ == H3_SETTINGS_QPACK_BLOCKED_STREAMS:
+                self.peer_settings_qpack_blocked_streams = v
+            elif id_ == H3_SETTINGS_ENABLE_CONNECT_PROTOCOL:
+                self.peer_settings_enable_connect_protocol = v != UInt64(0)
+
+    def emit_initial_settings(self) raises -> List[UInt8]:
+        """Build the server's outbound control-stream prefix:
+        the stream-type varint (0x00) followed by a SETTINGS
+        frame carrying the local
+        :class:`H3ConnectionConfig` values.
+
+        The reactor opens a local control uni-stream via QUIC
+        and emits these bytes as the very first payload (RFC
+        9114 §6.2.1: SETTINGS MUST be the first frame). This
+        is the only frame the server is required to send
+        proactively; GOAWAY / MAX_PUSH_ID are emitted on
+        demand."""
+        var out = List[UInt8]()
+        var type_var = encode_varint(UInt64(H3StreamType.CONTROL))
+        for i in range(len(type_var)):
+            out.append(type_var[i])
+        var settings = List[H3Setting]()
+        settings.append(
+            H3Setting(
+                identifier=H3_SETTINGS_MAX_FIELD_SECTION_SIZE,
+                value=self.config.max_field_section_size,
+            )
+        )
+        settings.append(
+            H3Setting(
+                identifier=H3_SETTINGS_QPACK_MAX_TABLE_CAPACITY,
+                value=self.config.qpack_max_table_capacity,
+            )
+        )
+        settings.append(
+            H3Setting(
+                identifier=H3_SETTINGS_QPACK_BLOCKED_STREAMS,
+                value=self.config.qpack_blocked_streams,
+            )
+        )
+        if self.config.enable_connect_protocol:
+            settings.append(
+                H3Setting(
+                    identifier=H3_SETTINGS_ENABLE_CONNECT_PROTOCOL,
+                    value=UInt64(1),
+                )
+            )
+        var payload = List[UInt8]()
+        encode_h3_settings(settings, payload)
+        encode_h3_frame(H3_FRAME_TYPE_SETTINGS, Span[UInt8, _](payload), out)
+        return out^
+
+    def emit_goaway(mut self, max_stream_id: UInt64) raises -> List[UInt8]:
+        """Build a GOAWAY frame announcing ``max_stream_id`` (RFC
+        9114 §5.2). The reactor writes the result onto the
+        locally-opened control stream immediately and flips
+        :attr:`goaway_emitted` so the next open_request_stream
+        rejects with H3_REQUEST_CANCELLED."""
+        if self.goaway_emitted:
+            raise Error("h3 server: GOAWAY already emitted")
+        var out = List[UInt8]()
+        var payload = encode_varint(max_stream_id)
+        encode_h3_frame(H3_FRAME_TYPE_GOAWAY, Span[UInt8, _](payload), out)
+        self.goaway_emitted = True
+        return out^
 
     def take_response_frames(mut self, stream_id: Int) raises -> List[UInt8]:
         """Drain pending outbound bytes for ``stream_id`` and
