@@ -184,7 +184,10 @@ from .cc import (
     CUBIC_BETA_NUM,
     CUBIC_C_DEN,
     CUBIC_C_NUM,
+    CcChoice,
     CcState,
+    CongestionController,
+    CubicController,
     DEFAULT_MSS_BYTES,
     HYSTART_HIGH_RTT_THRESHOLD_MS,
     HYSTART_LOW_RTT_THRESHOLD_MS,
@@ -193,6 +196,7 @@ from .cc import (
     MIN_WINDOW_PACKETS,
     PACING_GAIN_DEN,
     PACING_GAIN_NUM,
+    RenoController,
     can_send,
     cc_init,
     on_ack_received,
@@ -214,6 +218,12 @@ from .crypto import (
     hkdf_expand_label,
     hkdf_expand_label_empty_context,
     hkdf_extract,
+)
+from .server import (
+    ConnectionIdTable,
+    QuicConnection,
+    QuicListener,
+    QuicServerConfig,
 )
 from .state import (
     CONN_STATE_CLOSED,
