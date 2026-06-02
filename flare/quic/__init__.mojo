@@ -48,6 +48,15 @@ Public re-exports:
   :func:`on_ack_received`, :func:`on_packets_lost`,
   :func:`on_round_start`, :func:`pacing_budget`,
   :func:`pacing_rate_bytes_per_second`, :func:`can_send`.
+- :mod:`.crypto` — sans-I/O QUIC v1 crypto math
+  (RFC 9001 §5 + RFC 5869 + RFC 8446 §7.1): HKDF-Extract,
+  HKDF-Expand, HKDF-Expand-Label, RFC 9001 §5.2 initial-
+  secret derivation, plus the :trait:`QuicCrypto` AEAD
+  trait surface that the QUIC server reactor binds against.
+  The OpenSSL AEAD backend lands in a focused follow-up
+  commit; this module exposes :class:`StubQuicCrypto` as a
+  typed sentinel so the reactor wiring tests can pin the
+  trait boundary today.
 """
 
 from .varint import (
@@ -192,6 +201,19 @@ from .cc import (
     on_round_start,
     pacing_budget,
     pacing_rate_bytes_per_second,
+)
+from .crypto import (
+    InitialSecrets,
+    QUIC_V1_INITIAL_SALT,
+    QuicAead,
+    QuicCrypto,
+    SHA256_OUTPUT_BYTES,
+    StubQuicCrypto,
+    derive_initial_secrets,
+    hkdf_expand,
+    hkdf_expand_label,
+    hkdf_expand_label_empty_context,
+    hkdf_extract,
 )
 from .state import (
     CONN_STATE_CLOSED,
