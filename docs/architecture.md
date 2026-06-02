@@ -29,11 +29,11 @@ flare.ws       WebSocket client + server (RFC 6455). Multi-worker
                context-takeover via PermessageDeflateContext
                (persistent z_stream pair carrying the LZ77
                window between messages; per-message cap on
-               both paths to bound zip-bomb risk). ALPN-aware
-               WsClient.connect_prefer_h2 factory dispatches
-               on the negotiated protocol -- h1 via the
-               existing Upgrade handshake, h2 routed to the
-               in-flight H2-tunnel runtime.
+               both paths to bound zip-bomb risk).                ALPN-aware
+               WsAutoClient.connect dispatches on the
+               negotiated protocol -- h1 via the existing
+               Upgrade handshake, h2 routed to WsOverH2Stream
+               via Extended CONNECT.
 flare.http2    Low-level HTTP/2 byte drivers (RFC 9113 +
                RFC 7541): Frame codec, HPACK enc/dec (incl.
                H=1 Huffman literals + a 256-entry table-driven
@@ -109,12 +109,18 @@ flare.quic     Sans-I/O QUIC v1 codec primitives + pure state
                tests) per RFC 9002 Appendix B.
                `flare.quic.crypto` carries the RFC 9001 §5 +
                RFC 5869 HKDF key schedule + the `QuicCrypto`
-               trait that abstracts the AEAD backend; the
-               OpenSSL implementation behind the trait is in
-               flight. `flare.quic.server` defines the
-               `QuicListener` + `QuicConnection` +
-               `ConnectionIdTable` carriers; the UDP read loop +
-               per-datagram dispatch land in the next pass.
+               trait + the `OpenSslQuicCrypto` AEAD backend
+               (AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305,
+               header-protection masks per RFC 9001 §5.3 /
+               §5.4). `flare.quic.server` runs the UDP reactor:
+               `QuicListener.run` binds, `recvmmsg` + `UDP_GRO`
+               feed `ConnectionIdTable.lookup`, the per-datagram
+               bytes flow through `OpenSslQuicCrypto.decrypt` ->
+               `parse_frame_into[H]` -> `Connection.handle_frame`
+               -> `ConnectionEvents`; PTO + idle + ack-delay
+               timers sit on the shared `flare.runtime.TimerWheel`;
+               CC + pacing budget gate `sendmmsg` on the egress
+               path. ECN is echoed per RFC 9002 §A.4.
 flare.h3       Sans-I/O HTTP/3 codec primitives: frame codec +
                SETTINGS payload (RFC 9114 §7); request-stream
                state machine (`H3RequestReader` + the
@@ -129,11 +135,14 @@ flare.h3       Sans-I/O HTTP/3 codec primitives: frame codec +
                pseudo-header validation. The encoders accept a
                `mut out: List[UInt8]` so the caller threads a
                per-connection buffer through repeated writes.
-               The `H3Connection` driver carrier
-               (`flare.h3.server`) lands as a scaffold with
-               per-stream `H3RequestReader` allocation +
-               GOAWAY lifecycle; the per-stream feed / take
-               wiring is the focused follow-up.
+               The `H3Connection` driver in `flare.h3.server`
+               drives per-stream `H3RequestReader` allocation,
+               `feed_stream_chunk` -> Handler -> response writer
+               dispatch, `take_response_frames` egress draining,
+               and CONTROL + QPACK uni-stream type dispatch per
+               RFC 9114 §6.2 (SETTINGS / GOAWAY / MAX_PUSH_ID
+               consumed; QPACK dynamic-table inserts rejected
+               per the SETTINGS we advertise).
 flare.qpack    Sans-I/O static-only QPACK encoder + decoder
                (RFC 9204). Static table per Appendix A (99
                entries), literal field lines with literal
@@ -145,9 +154,15 @@ flare.tls      TLS 1.2/1.3 (OpenSSL); TlsAcceptor + ALPN +
                session resumption (RFC 5077 tickets / RFC 8446
                §4.6.1 NewSessionTicket capture and replay).
                The QUIC-side binding (`RustlsQuicAcceptor` +
-               `RustlsQuicSession`) sits behind a separate
-               Rust-backed FFI; the OpenSSL path stays the
-               canonical h1 / h2 TLS acceptor.
+               `RustlsQuicSession`) wraps `rustls::quic::ServerConnection`
+               (rustls 0.23) through a C ABI shim; per-level
+               CRYPTO frames feed / drain through
+               `flare_rustls_quic_feed_crypto` / `_take_crypto`,
+               negotiated ALPN through `flare_rustls_quic_alpn`.
+               OpenSSL stays the canonical h1 / h2 TLS acceptor;
+               rustls handles the QUIC TLS exchange because the
+               OpenSSL QUIC API is still tracking the IETF
+               draft branch.
 flare.tcp      TcpStream + TcpListener (IPv4 + IPv6)
 flare.udp      UdpSocket (IPv4 + IPv6)
 flare.uds      UnixListener + UnixStream (AF_UNIX sidecar IPC)
@@ -303,19 +318,25 @@ wiring is left to the caller.
 
 ---
 
-## HTTP/2: one server, one client, version-aware
+## HTTP/2 + HTTP/3: one server, one client, version-aware
 
-There is no separate `Http2Server` / `Http2Client` to learn.
-`flare.http.HttpServer` and `flare.http.HttpClient` are HTTP-
-version-aware internally:
+There is no separate `Http2Server` / `Http2Client` /
+`Http3Server` to learn. `flare.http.HttpServer` and
+`flare.http.HttpClient` are HTTP-version-aware internally:
 
 - `HttpServer.serve(handler, num_workers=N)` runs a unified
   reactor loop ([`flare/http/_unified_reactor_impl.mojo`](../flare/http/_unified_reactor_impl.mojo))
-  that auto-dispatches every accepted connection to either
+  that auto-dispatches every accepted TCP connection to either
   the existing HTTP/1.1 `ConnHandle` or the new HTTP/2
   `H2ConnHandle` based on the first 24 bytes (RFC 9113 §3.4
   client connection preface). The same handler is invoked
   for both wires.
+- `HttpServer.bind_with_h3(addr, quic_cfg)` adds a UDP
+  listener alongside the TCP one and routes h3 to
+  `flare.h3.H3Connection` after the rustls QUIC handshake
+  selects ALPN `h3`. The same handler is invoked on h1, h2,
+  and h3 simultaneously; see
+  [`http3_server.mojo`](../examples/advanced/http3_server.mojo).
 - `HttpClient` advertises ALPN `["h2", "http/1.1"]` on every
   TLS ClientHello and dispatches internally based on what
   the server selected; if the server picks `http/1.1` (or
@@ -371,6 +392,7 @@ there is no parity table any more -- one type, one shape:
 | Surface | Type |
 |---|---|
 | HTTP server (HTTP/1.1 + HTTP/2 via auto-dispatch) | [`flare.http.HttpServer`](../flare/http/server.mojo) |
+| HTTP server (HTTP/1.1 + HTTP/2 + HTTP/3 via ALPN; UDP listener mounted alongside TCP) | [`flare.http.HttpServer.bind_with_h3`](../flare/http/server.mojo) |
 | HTTP client (HTTP/1.1 + HTTP/2 via TLS+ALPN or `prefer_h2c=True`) | [`flare.http.HttpClient`](../flare/http/client.mojo) |
 | WebSocket server (HTTP/1.1 Upgrade; RFC 8441 over h2 wired on the byte driver) | [`flare.ws.WsServer`](../flare/ws/server.mojo) |
 | WebSocket server (multi-worker via SO_REUSEPORT) | `flare.ws.WsServer.serve(handler, num_workers=N)` |
