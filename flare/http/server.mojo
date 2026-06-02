@@ -16,6 +16,8 @@ from json import dumps, Value as JsonValue
 
 from ..runtime._libc_time import libc_nanosleep_ms
 
+from std.collections import Optional
+
 from .handler import Handler, CancelHandler
 from .intern import intern_method_bytes
 from .request import Request, Method
@@ -24,9 +26,17 @@ from .headers import HeaderMap
 from .proto.ascii import ascii_unchecked_string
 from .proto.h1_leniency import H1LeniencyConfig
 from .static_response import StaticResponse
+from .alpn_dispatch import (
+    ALPN_HTTP_1_1,
+    ALPN_HTTP_2,
+    ALPN_HTTP_3,
+    WireProtocol,
+    dispatch_alpn,
+)
 from ..http2.server import Http2Config
 from ..net import IpAddr, SocketAddr, NetworkError, BrokenPipe, Timeout
 from ..tcp import TcpListener, TcpStream
+from ..quic.server import QuicListener, QuicServerConfig
 
 
 # ── Server configuration ─────────────────────────────────────────────────────
@@ -265,6 +275,25 @@ struct HttpServer(Movable):
     var _stopping: Bool
     """Set by ``close()`` to break the reactor loop. Read from the loop
     itself each iteration."""
+    var _h3_listener: Optional[QuicListener]
+    """Optional HTTP/3 UDP listener (Track Q5-W commit 1/2).
+
+    ``None`` (the default) when the server was constructed via
+    :meth:`bind` or :meth:`bind_many` (TCP-only flows). Set to a
+    fully-bound :class:`flare.quic.server.QuicListener` when the
+    server was constructed via :meth:`bind_with_h3`; the listener
+    owns its UDP socket fd, its per-listener timer wheel, and the
+    QUIC connection slab.
+
+    The reactor wiring that drains this listener -- pulling
+    inbound datagrams, dispatching through
+    :class:`flare.h3.H3Connection`, draining outbound -- is the
+    Track Q5-W commit 2/2 + the v0.7 reactor follow-up. This
+    commit ships the bind path + the ALPN routing decision +
+    the per-listener :meth:`tick_h3_once` test-only entry point
+    so the full plumbing can be wired without reshaping the
+    public surface again.
+    """
 
     def __init__(
         out self,
@@ -278,10 +307,16 @@ struct HttpServer(Movable):
         self.config = config^
         self.h2_config = h2_config^
         self._stopping = False
+        self._h3_listener = None
 
     def __del__(deinit self):
         self._listener.close()
         self._close_extras()
+        # The Optional[QuicListener] field's destructor closes
+        # the UDP fd + tears down the QUIC connection slab + the
+        # timer wheel via QuicListener.__del__. No-op when no h3
+        # listener is bound.
+        _ = self._h3_listener^
 
     def _close_extras(mut self):
         """Close every fd in :attr:`_extra_listener_fds` via
@@ -417,6 +452,142 @@ struct HttpServer(Movable):
         for i in range(len(self._extra_local_addrs)):
             out.append(self._extra_local_addrs[i].copy())
         return out^
+
+    @staticmethod
+    def bind_with_h3(
+        tcp_addr: SocketAddr,
+        var udp_cfg: QuicServerConfig,
+        var config: ServerConfig = ServerConfig(),
+        var h2_config: Http2Config = Http2Config(),
+    ) raises -> HttpServer:
+        """Bind an HTTP server that speaks h1 / h2c / h2 over TCP
+        on ``tcp_addr`` AND h3 over QUIC/UDP on the address in
+        ``udp_cfg``. Track Q5-W commit 1/2.
+
+        The TLS ALPN list advertised by the TCP listener (h2,
+        http/1.1) and the QUIC listener (h3 only) is what tells
+        peers which wire is reachable on which transport. The
+        decision function
+        :func:`flare.http.alpn_dispatch.dispatch_alpn` routes the
+        negotiated ALPN identifier to the matching driver:
+
+        * ``"h3"`` -> the QUIC listener / :class:`H3Connection`.
+        * ``"h2"`` -> the TCP h2 reactor / :class:`H2ConnHandle`.
+        * ``"http/1.1"`` / empty -> the TCP h1 reactor /
+          :class:`ConnHandle`.
+        * h2c upgrade hint -> H2C (TCP path only).
+
+        The reactor wiring that actually drains the QUIC listener
+        ships in Track Q5-W commit 2/2 + the v0.7 reactor
+        follow-up; this commit ships the bind path + the ALPN
+        routing decision + per-listener accessors. Calling
+        :meth:`serve` on a server returned by this method runs
+        the TCP reactor exactly as before; the UDP listener is
+        held open and reachable via :meth:`local_h3_addr` /
+        :meth:`tick_h3_once` until the full reactor wiring
+        lands. Closing the server (via :meth:`close` or
+        ``__del__``) closes both listeners.
+
+        Args:
+            tcp_addr: Local TCP address for h1 / h2c / h2.
+            udp_cfg: :class:`QuicServerConfig` for the h3 UDP
+                bind. ``udp_cfg.host`` / ``udp_cfg.port`` apply
+                to the QUIC listener; the rest of the config
+                (CC choice, idle timeout, ...) is passed
+                through.
+            config: HTTP/1.1 server configuration (optional).
+            h2_config: HTTP/2 SETTINGS the server advertises to
+                h2 peers (optional).
+
+        Returns:
+            An ``HttpServer`` holding both listeners.
+
+        Raises:
+            AddressInUse: If either port is already bound.
+            NetworkError: For any other OS error.
+        """
+        var tcp_listener = TcpListener.bind(tcp_addr)
+        var quic_listener = QuicListener.bind(udp_cfg^)
+        var srv = HttpServer(tcp_listener^, config^, h2_config^)
+        srv._h3_listener = quic_listener^
+        return srv^
+
+    def has_h3(self) -> Bool:
+        """Whether this server has an h3 UDP listener bound."""
+        return self._h3_listener is not None
+
+    def local_h3_addr(self) raises -> SocketAddr:
+        """Return the local address of the h3 UDP listener.
+
+        Raises:
+            Error: If no h3 listener is bound.
+        """
+        if not self.has_h3():
+            raise Error("HttpServer.local_h3_addr: no h3 listener bound")
+        return self._h3_listener.value().local_addr()
+
+    def advertised_alpn_protocols(self) -> List[String]:
+        """Return the ALPN identifier list this server expects to
+        advertise on its TLS handshakes. The TCP listener
+        advertises ``["h2", "http/1.1"]`` and the QUIC listener
+        advertises ``["h3"]``; here we surface the union (for
+        diagnostics + the ``alpn_dispatch_demo`` example).
+
+        Order matters: server preference is highest -> lowest,
+        which :func:`flare.http.alpn_dispatch.negotiate_alpn`
+        consumes verbatim.
+        """
+        var out = List[String]()
+        if self.has_h3():
+            out.append(ALPN_HTTP_3)
+        out.append(ALPN_HTTP_2)
+        out.append(ALPN_HTTP_1_1)
+        return out^
+
+    def route_alpn(self, alpn: String) raises -> Int:
+        """Map a negotiated ALPN identifier to a
+        :class:`flare.http.alpn_dispatch.WireProtocol` codepoint,
+        cross-checked against which listeners this server has
+        bound. ``"h3"`` routes to ``WireProtocol.HTTP_3`` only
+        when this server has an h3 listener; otherwise the
+        decision raises so the reactor can close the connection
+        with ``no_application_protocol``.
+
+        Args:
+            alpn: The ALPN identifier returned by the TLS
+                handshake (empty string == "no ALPN advertised").
+
+        Returns:
+            One of :class:`WireProtocol`.
+
+        Raises:
+            Error: If ``alpn == "h3"`` but no h3 listener is
+                bound.
+        """
+        var decision = dispatch_alpn(alpn)
+        if decision == WireProtocol.HTTP_3 and not self.has_h3():
+            raise Error(
+                "HttpServer.route_alpn: peer negotiated 'h3' but no h3 "
+                "listener is bound"
+            )
+        return decision
+
+    def tick_h3_once(mut self, now_ms: UInt64) raises -> Int:
+        """Advance the h3 listener's timer wheel one tick. Test-
+        only entry point used to validate the bind path before
+        the v0.7 reactor wiring lands; returns the number of
+        connections still alive after the sweep.
+
+        Raises:
+            Error: If no h3 listener is bound.
+        """
+        if not self.has_h3():
+            raise Error("HttpServer.tick_h3_once: no h3 listener bound")
+        var listener = self._h3_listener.take()
+        _ = listener.advance_timers(now_ms)
+        var count = listener.connection_count()
+        self._h3_listener = listener^
+        return count
 
     def serve(
         mut self,
