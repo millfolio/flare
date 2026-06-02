@@ -54,7 +54,15 @@ from std.memory import Span
 
 from ..net.address import IpAddr, SocketAddr
 from ..udp import UdpSocket
-from .cc import CcChoice
+from .cc import (
+    CcChoice,
+    CcState,
+    cc_init,
+    on_ack_received,
+    on_packet_sent,
+    on_packets_lost,
+    pacing_budget,
+)
 from .crypto import QuicAead
 from .packet import (
     ConnectionId,
@@ -238,6 +246,22 @@ struct QuicConnection(Copyable, Movable):
     when ``conn.ack_pending`` flips True; cleared when the ACK
     is actually emitted (commit 4/5 of Track Q3-W)."""
 
+    var cc_state: CcState
+    """Per-connection congestion-controller state. Drives the
+    cwnd + pacing budget via the pure functions in
+    :mod:`flare.quic.cc`. Initialized via :func:`cc_init` with
+    RFC 9002 §B.2 defaults; the reactor hands per-ACK +
+    per-loss samples in through :meth:`update_on_ack` /
+    :meth:`update_on_loss` (Track Q3-W commit 4/5)."""
+
+    var last_send_us: UInt64
+    """Wall-clock timestamp (microseconds) of the most-recent
+    send-path tick on this connection. Used by the pacing
+    budget calculation: the reactor's egress path calls
+    :meth:`pacing_budget(now_us)` and the helper subtracts
+    ``last_send_us`` to get the elapsed delta the pure
+    :func:`flare.quic.cc.pacing_budget` function consumes."""
+
     def __init__(
         out self,
         local_cid: ConnectionId,
@@ -254,6 +278,8 @@ struct QuicConnection(Copyable, Movable):
         self.idle_timer_id = UInt64(0)
         self.pto_timer_id = UInt64(0)
         self.ack_delay_timer_id = UInt64(0)
+        self.cc_state = cc_init()
+        self.last_send_us = UInt64(0)
 
     def on_idle_expired(mut self):
         """RFC 9000 §10.1.2 -- silent close on idle timeout.
@@ -282,6 +308,59 @@ struct QuicConnection(Copyable, Movable):
         the peer's RTT estimate stays current."""
         self.ack_delay_timer_id = UInt64(0)
         self.conn.ack_pending = True
+
+    # -- Congestion-control + pacing drive ------------------------------
+
+    def update_on_ack(
+        mut self,
+        acked_bytes: UInt64,
+        rtt_us: UInt64,
+        now_us: UInt64,
+    ) -> UInt64:
+        """Advance the congestion-controller state in response to
+        an ACK that acknowledged ``acked_bytes`` of in-flight
+        payload at time ``now_us`` with RTT sample ``rtt_us``.
+
+        Delegates to the pure
+        :func:`flare.quic.cc.on_ack_received` function, which
+        dispatches between slow-start / CUBIC congestion-
+        avoidance / HyStart++ exit per RFC 9438 + RFC 9406.
+        Returns the new cwnd in bytes.
+        """
+        return on_ack_received(self.cc_state, acked_bytes, rtt_us, now_us)
+
+    def update_on_loss(mut self, lost_bytes: UInt64, now_us: UInt64) -> UInt64:
+        """Apply a loss event: shrink cwnd per the CC's loss
+        response (Reno: cwnd /= 2; CUBIC: cwnd *= 0.7) and reset
+        the slow-start exit threshold. Returns the new cwnd."""
+        return on_packets_lost(self.cc_state, lost_bytes, now_us)
+
+    def on_packet_sent_bytes(mut self, bytes: UInt64, now_us: UInt64):
+        """Update the in-flight accounting + pacing timestamp
+        when the egress path actually sends ``bytes`` of payload.
+        Wraps :func:`flare.quic.cc.on_packet_sent`; the
+        ``last_send_us`` carrier is the seam the next
+        :meth:`pacing_budget` call subtracts against."""
+        on_packet_sent(self.cc_state, bytes)
+        self.last_send_us = now_us
+
+    def pacing_budget(self, now_us: UInt64) -> UInt64:
+        """Bytes the egress path is allowed to send right now
+        under the CC's pacing rate.
+
+        ``now_us`` is the current wall-clock; the helper
+        subtracts the connection's :attr:`last_send_us` to get
+        the elapsed-since-last-send delta the pure
+        :func:`flare.quic.cc.pacing_budget` function consumes.
+        Sub-millisecond elapsed values (e.g. 10 us at 12 Mbps
+        cwnd produces 15 bytes of budget) round-trip cleanly --
+        the underlying multiply happens in nanoseconds inside
+        the pure function so precision is not lost.
+        """
+        if self.last_send_us == UInt64(0) or now_us < self.last_send_us:
+            return self.cc_state.mss
+        var elapsed_us = now_us - self.last_send_us
+        return pacing_budget(self.cc_state, elapsed_us)
 
     def handle_packet(
         mut self,
