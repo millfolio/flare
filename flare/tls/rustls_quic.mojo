@@ -297,6 +297,19 @@ struct RustlsQuicAcceptor(Movable):
         if self._opaque_handle != 0:
             _do_acceptor_free(self._lib, self._opaque_handle)
 
+    def free_session(self, handle: Int):
+        """Release a per-connection rustls session previously
+        produced by :func:`flare.tls._rustls_quic_ffi._do_accept`
+        through the acceptor's pinned library handle.
+
+        NULL is a no-op. Used by :class:`flare.quic.server.QuicListener`
+        to drop every session in its slab from inside the
+        listener's destructor without sub-field access on
+        ``self.tls_acceptor._lib`` (which Mojo's ``deinit``
+        ordering rule forbids -- see Track Q9-W).
+        """
+        _do_session_free(self._lib, handle)
+
     def accept(self, dst_cid: List[UInt8]) raises -> RustlsQuicSession:
         """Create a new per-connection session bound to the
         client's Destination Connection ID.

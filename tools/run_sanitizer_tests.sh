@@ -126,6 +126,14 @@ ASAN_TESTS=(
   # ConnectionIdTable / TimerWheel lifetime + the
   # OpenSslQuicCrypto FFI on the inbound decrypt hot path.
   "tests/quic/test_quic_loopback_integration.mojo"
+  # Track Q9-W commit 1/6 -- rustls QUIC handshake bridge.
+  # Drives QuicConnection.handle_packet -> CRYPTO frame ->
+  # _do_feed_crypto / _do_take_crypto against a real-PEM
+  # acceptor + multiple accepted sessions per listener so ASan
+  # validates the Rust-side Box<Session>* lifetime: every
+  # non-zero session handle freed exactly once via
+  # RustlsQuicAcceptor.free_session at listener teardown.
+  "tests/quic/test_quic_handshake_bridge.mojo"
 )
 TSAN_TESTS=(
   # Multicore + reactor (the only places we spawn pthreads)

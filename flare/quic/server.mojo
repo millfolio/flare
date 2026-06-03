@@ -91,7 +91,53 @@ from .timers import (
     encode_timer_token,
 )
 from ..runtime.timer_wheel import TimerWheel
-from ..tls.rustls_quic import RustlsQuicConfig
+from ..tls.rustls_quic import (
+    QuicEncryptionLevel,
+    RustlsQuicAcceptor,
+    RustlsQuicConfig,
+)
+from ..tls._rustls_quic_ffi import (
+    _do_accept,
+    _do_feed_crypto,
+    _do_is_handshake_complete,
+    _do_session_free,
+    _do_take_crypto,
+)
+
+
+# -- Per-slot rustls QUIC session carrier ------------------------------
+
+
+@fieldwise_init
+struct _SessionSlot(Copyable, Movable):
+    """Per-slot rustls QUIC session state.
+
+    Non-owning carrier: the per-listener slab
+    (:attr:`QuicListener.tls_sessions`) is the sole owner of the
+    Rust-side ``Box<Session>``. Every per-connection bridge call
+    routes the FFI through the listener's pinned
+    ``tls_acceptor._lib`` borrow so :class:`OwnedDLHandle`'s
+    refcount keeps ``libflare_rustls_quic.so`` mapped across the
+    call. The slab's element type is ``_SessionSlot`` rather than
+    :class:`flare.tls.rustls_quic.RustlsQuicSession` because the
+    latter is ``Movable``-only and ``List[T]`` requires
+    ``T: Copyable``. Carrier copy is safe: the integer ``handle``
+    is a non-owning view, and the slab's :meth:`QuicListener.__del__`
+    is the unique site that calls
+    :func:`flare.tls._rustls_quic_ffi._do_session_free` -- never
+    a slot's destructor.
+    """
+
+    var handle: Int
+    """Raw ``Box<Session>*`` (as ``Int``); 0 = NULL sentinel
+    (empty-PEM config or acceptor-rejected accept). The dispatcher
+    treats 0 as the silent-drop path per RFC 9001 §5.2."""
+
+    var level: Int
+    """Current outbound encryption level (one of the
+    :class:`flare.tls.rustls_quic.QuicEncryptionLevel` codepoints).
+    Starts at ``INITIAL``; advances as the rustls KeyChange enum
+    surfaces handshake + 1-RTT keys (Track Q10-W)."""
 
 
 # -- Configuration carrier ----------------------------------------------
@@ -526,6 +572,38 @@ struct QuicListener(Movable):
     runs at the end of every :meth:`advance_timers` call so
     timer-fired connections (idle, PTO-exhausted) get reaped
     against the same monotonic clock the wheel uses."""
+    var tls_acceptor: RustlsQuicAcceptor
+    """Long-lived rustls QUIC acceptor built once at
+    :meth:`bind` from :attr:`QuicServerConfig.rustls_config`.
+    Owns the rustls ``ServerConfig`` (cert + key + ALPN list)
+    that every per-connection session derives keys from. When
+    the caller passes the default (empty PEM)
+    :class:`RustlsQuicConfig`, the FFI returns a NULL handle and
+    the dispatch path routes all CRYPTO frames through the
+    silent-drop branch -- existing tests that bind a listener
+    purely to exercise the UDP / routing / timer surfaces
+    continue to work without supplying real PEM material."""
+    var tls_sessions: List[_SessionSlot]
+    """Parallel slab to :attr:`connections`: one rustls QUIC
+    session carrier per :class:`QuicConnection` slot. Each
+    :class:`_SessionSlot` holds the raw rustls
+    ``Box<Session>*`` (or 0 for the NULL-PEM sentinel) plus the
+    current outbound encryption level. The slab owns the
+    handles; :meth:`__del__` walks every non-zero handle through
+    :func:`flare.tls._rustls_quic_ffi._do_session_free` exactly
+    once at listener teardown. The shared FFI library handle for
+    every per-slot call is borrowed from
+    :attr:`tls_acceptor._lib` so the .so stays mapped across
+    every feed-crypto / take-crypto roundtrip."""
+    var tls_egress_queues: List[List[UInt8]]
+    """Per-slot outbound CRYPTO byte queue. Q9-W lands the
+    drain side: each successful :meth:`feed_crypto` is followed
+    by :meth:`take_crypto` and the resulting bytes append here
+    so the Q11-W protect + sendto path has a stable queue to
+    drain when the reactor's egress half lands. Today's reactor
+    short-circuits on the receive half (no sendto yet); the
+    queue is observable from tests so Q9-W can attest the
+    bridge dispatched."""
     var timer_wheel: TimerWheel
     """Per-listener :class:`flare.runtime.timer_wheel.TimerWheel`
     driving PTO / idle / ack-delay timeouts (Track Q3-W commit
@@ -545,16 +623,39 @@ struct QuicListener(Movable):
         config: QuicServerConfig,
         var sock: UdpSocket,
         addr: SocketAddr,
+        var tls_acceptor: RustlsQuicAcceptor,
     ):
         """Wrap an already-bound :class:`UdpSocket`. Internal --
         callers use :meth:`bind`."""
         self.config = config.copy()
         self.cid_table = ConnectionIdTable()
         self.connections = List[QuicConnection]()
+        self.tls_acceptor = tls_acceptor^
+        self.tls_sessions = List[_SessionSlot]()
+        self.tls_egress_queues = List[List[UInt8]]()
         self.timer_wheel = TimerWheel(now_ms=UInt64(0))
         self._socket = sock^
         self._local_addr = addr
         self._stopping = False
+
+    def __del__(deinit self):
+        """Drop the listener: release every rustls session in
+        the slab exactly once.
+
+        Each :class:`_SessionSlot` is a non-owning carrier; the
+        slab itself is the unique owner of the underlying
+        ``Box<Session>*`` allocations rustls produced via
+        :func:`_do_accept`. The free routes through
+        :meth:`RustlsQuicAcceptor.free_session` so Mojo's
+        ``deinit`` rule (no sub-field access during ``deinit``)
+        is respected -- the acceptor borrows ``self`` (and its
+        ``_lib``) by reference rather than via a sub-field of
+        the listener.
+        """
+        for i in range(len(self.tls_sessions)):
+            var h = self.tls_sessions[i].handle
+            if h != 0:
+                self.tls_acceptor.free_session(h)
 
     @staticmethod
     def bind(config: QuicServerConfig) raises -> QuicListener:
@@ -563,12 +664,21 @@ struct QuicListener(Movable):
 
         If ``config.port == 0`` the kernel picks an ephemeral
         port; read it back via :meth:`local_addr`.
+
+        Constructs the per-listener rustls QUIC acceptor from
+        ``config.rustls_config`` at bind time so each accepted
+        connection's TLS session is materialized against the
+        same long-lived ``ServerConfig`` (Track Q9-W). An empty
+        / malformed PEM does not raise here; the acceptor
+        surfaces a NULL handle and CRYPTO bytes route through
+        the silent-drop branch.
         """
         var ip = IpAddr.parse(config.host)
         var addr = SocketAddr(ip, config.port)
         var sock = UdpSocket.bind(addr)
         var actual = sock.local_addr()
-        return QuicListener(config, sock^, actual)
+        var acceptor = RustlsQuicAcceptor(config.rustls_config.copy())
+        return QuicListener(config, sock^, actual, acceptor^)
 
     def local_addr(self) -> SocketAddr:
         """Return the address the UDP socket is actually bound to.
@@ -639,22 +749,76 @@ struct QuicListener(Movable):
         Other state-machine errors propagate to the caller so
         the reactor can log + close the connection.
 
-        On success also re-arms the per-connection idle timer
-        so the activity-based timeout window slides forward
-        (Track Q3-W commit 3/5).
+        On a successful decrypt + parse pass also forwards any
+        inbound CRYPTO frame bytes to the slot's rustls QUIC
+        session via :meth:`_dispatch_crypto_frames` and re-arms
+        the per-connection idle timer.
         """
         var now_us = UInt64(0)  # Wall-clock driven from commit 4/5
         var conn = self.connections[slot].copy()
+        var events = empty_events()
+        var ok = True
         try:
-            var _events = conn.handle_packet(datagram, now_us)
+            events = conn.handle_packet(datagram, now_us)
         except:
             # Silent drop on decrypt + parse failures
             # (RFC 9001 §5.2). The connection slot stays alive
             # for retransmits + subsequent valid packets.
-            self.connections[slot] = conn^
-            return
+            ok = False
         self.connections[slot] = conn^
+        if not ok:
+            return
+        self._dispatch_crypto_frames(slot, events)
         _ = self.schedule_idle_timeout(slot)
+
+    def _dispatch_crypto_frames(
+        mut self, slot: Int, events: ConnectionEvents
+    ) raises:
+        """Forward inbound CRYPTO frame bytes to the slot's
+        rustls QUIC session and drain its outbound CRYPTO bytes
+        into the per-slot egress queue.
+
+        Track Q9-W covers the INITIAL encryption level only --
+        the dispatcher's :meth:`handle_packet` short-circuits
+        non-Initial packets to empty events today, so every
+        CRYPTO frame reaching this branch came out of an
+        Initial packet. Track Q10-W lands the Handshake +
+        1-RTT branches; Q11-W lands the protect + sendto path
+        that actually puts :attr:`tls_egress_queues` on the
+        wire. The session's ``rustls::quic::Connection::write_hs``
+        coalesces fragments internally; this driver does not
+        need to track CRYPTO frame offsets at the QUIC layer
+        for the rustls handoff.
+
+        Both the feed-crypto and take-crypto FFI calls route
+        through :attr:`tls_acceptor._lib` so the .so stays
+        mapped across the call (Mojo's ASAP destructor cannot
+        unmap the library between symbol resolution and the
+        thunk).
+        """
+        if slot < 0 or slot >= len(self.tls_sessions):
+            return
+        var handle = self.tls_sessions[slot].handle
+        if handle == 0 or len(events.crypto_frames) == 0:
+            return
+        var lvl = QuicEncryptionLevel.INITIAL
+        for i in range(len(events.crypto_frames)):
+            var chunk = List[UInt8]()
+            for j in range(len(events.crypto_frames[i].data)):
+                chunk.append(events.crypto_frames[i].data[j])
+            var rc = _do_feed_crypto(self.tls_acceptor._lib, handle, lvl, chunk)
+            if rc != 0:
+                # rustls rejected the bytes (bad TLS grammar) --
+                # silent drop per RFC 9001 §5.2. The session
+                # level does not advance, which is what Q10-W's
+                # Handshake-key gating reads.
+                continue
+        try:
+            var out = _do_take_crypto(self.tls_acceptor._lib, handle, lvl)
+            for k in range(len(out)):
+                self.tls_egress_queues[slot].append(out[k])
+        except:
+            pass
 
     def _dispatch_long(
         mut self, datagram: Span[UInt8, _], peer: SocketAddr
@@ -697,9 +861,9 @@ struct QuicListener(Movable):
         server-side response; that follow-up is part of the
         per-packet wiring in commit 2/5 of this track.
 
-        Also arms the per-connection idle timeout (commit 3/5)
-        so a half-open handshake that never completes gets
-        reaped at ``max_idle_timeout_ms``.
+        Also materializes the per-slot rustls QUIC session
+        (Track Q9-W) and the empty CRYPTO egress queue, and
+        arms the per-connection idle timeout.
         """
         var local_cid = lh.dcid.copy()
         var peer_cid = lh.scid.copy()
@@ -712,9 +876,33 @@ struct QuicListener(Movable):
         )
         var slot = len(self.connections)
         self.connections.append(qc^)
+        self.tls_sessions.append(self._new_session_slot())
+        self.tls_egress_queues.append(List[UInt8]())
         self.cid_table.register(cid_to_hex(local_cid), slot)
         _ = self.schedule_idle_timeout(slot)
         return slot
+
+    def _new_session_slot(mut self) -> _SessionSlot:
+        """Materialize a per-slot rustls QUIC session.
+
+        Empty-PEM configurations (the default
+        :class:`RustlsQuicConfig` shape that the existing test
+        suite + fuzz harness rely on) leave the acceptor's
+        opaque handle at 0; this method short-circuits to the
+        NULL-handle sentinel slot. Production paths with a real
+        PEM cert call into :func:`_do_accept` with an empty
+        transport-parameters blob (Q10-W lands the encoded
+        transport parameters); any FFI rejection also falls
+        through to the NULL sentinel so the slab stays in
+        lockstep with :attr:`connections`.
+        """
+        if self.tls_acceptor._opaque_handle == 0:
+            return _SessionSlot(handle=0, level=QuicEncryptionLevel.INITIAL)
+        var empty_tp = List[UInt8]()
+        var handle = _do_accept(
+            self.tls_acceptor._lib, self.tls_acceptor._opaque_handle, empty_tp
+        )
+        return _SessionSlot(handle=handle, level=QuicEncryptionLevel.INITIAL)
 
     def tick(mut self, timeout_ms: Int = 100) raises -> Bool:
         """Drain at most one inbound datagram.

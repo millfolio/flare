@@ -145,6 +145,14 @@ struct ConnectionEvents(Copyable, Movable):
       this tick (the caller delivers them up to the application).
     * ``new_streams`` -- streams created by an inbound STREAM
       frame that the local side hadn't seen before.
+    * ``crypto_frames`` -- CRYPTO frames (RFC 9000 §19.6) parsed
+      this tick. The sans-I/O state machine cannot drive the TLS
+      handshake adapter directly without breaking the no-I/O
+      contract; instead the parser appends every CRYPTO payload
+      here and the reactor wrapper (Track Q9-W) drains the list
+      after :func:`handle_frame_buf` returns and forwards each
+      payload to its :class:`flare.tls.rustls_quic.RustlsQuicSession`
+      at the matching encryption level.
     * ``next_deadline_us`` -- earliest absolute time the driver
       should call back (for idle / PTO / loss detection); ``0``
       means "no scheduled timer".
@@ -155,6 +163,7 @@ struct ConnectionEvents(Copyable, Movable):
     var error_code: UInt64
     var finished_streams: List[UInt64]
     var new_streams: List[UInt64]
+    var crypto_frames: List[CryptoFrame]
     var next_deadline_us: UInt64
 
 
@@ -165,6 +174,7 @@ def empty_events() -> ConnectionEvents:
         error_code=UInt64(0),
         finished_streams=List[UInt64](),
         new_streams=List[UInt64](),
+        crypto_frames=List[CryptoFrame](),
         next_deadline_us=UInt64(0),
     )
 
@@ -406,10 +416,15 @@ struct _ConnFrameHandler(FrameHandler):
 
     def on_crypto(mut self, c: CryptoFrame) raises:
         _arrive(self._conn()[], self.now_us, ack_eliciting=True)
-        # Crypto stream is opaque at this layer; the reactor
-        # forwards its bytes to the TLS handshake adapter, then
-        # later signals handshake completion via
+        # CRYPTO frames carry TLS-handshake bytes that the sans-I/O
+        # state machine deliberately does not interpret. Surface the
+        # raw frame on :class:`ConnectionEvents` so the reactor
+        # (Track Q9-W) can forward the bytes to the rustls QUIC
+        # session at the matching encryption level after this
+        # :func:`handle_frame_buf` call returns. Handshake completion
+        # is still signalled separately via
         # :func:`mark_handshake_complete`.
+        self._events()[].crypto_frames.append(c.copy())
 
     def on_new_token(mut self, t: NewTokenFrame) raises:
         _arrive(self._conn()[], self.now_us, ack_eliciting=True)
