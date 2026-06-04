@@ -48,7 +48,6 @@ References:
 
 from std.collections import List, Optional, Dict
 from std.memory import Span, UnsafePointer
-
 from .frame import (
     AckFrame,
     AckRange,
@@ -216,6 +215,7 @@ struct Connection(Copyable, Movable):
     var streams: Dict[UInt64, Stream]
     var ack_pending: Bool
     var largest_received_packet: UInt64
+    var largest_acked_by_peer: UInt64
     var close_error_code: UInt64
     var close_reason: List[UInt8]
 
@@ -236,6 +236,7 @@ def new_connection(
         streams=Dict[UInt64, Stream](),
         ack_pending=False,
         largest_received_packet=UInt64(0),
+        largest_acked_by_peer=UInt64(0),
         close_error_code=UInt64(0),
         close_reason=List[UInt8](),
     )
@@ -303,14 +304,15 @@ def apply_stream(
 def apply_ack(mut conn: Connection, ack: AckFrame):
     """Apply an ACK frame to the connection-level bookkeeping.
 
-    The codec-layer state machine only tracks bytes_in_flight at
-    a coarse granularity; the reactor wrapper threads the precise
-    packet-level RTT samples into :func:`flare.quic.cc.on_ack_received`.
-    The largest acknowledged packet number is stored so the
-    reactor can advance its packet-number ack tracker.
+    ``largest_acknowledged`` names the largest packet WE sent that
+    the peer received; it lives in its own packet-number space and
+    must NOT touch ``largest_received_packet`` (the largest packet
+    WE received, which seeds inbound pn reconstruction). The
+    reactor threads precise RTT samples through
+    :func:`flare.quic.cc.on_ack_received`.
     """
-    if ack.largest_acknowledged > conn.largest_received_packet:
-        conn.largest_received_packet = ack.largest_acknowledged
+    if ack.largest_acknowledged > conn.largest_acked_by_peer:
+        conn.largest_acked_by_peer = ack.largest_acknowledged
 
 
 def apply_connection_close(

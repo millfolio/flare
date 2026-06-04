@@ -308,8 +308,15 @@ def _do_packet_encrypt(
     var tag = List[UInt8](capacity=16)
     for _ in range(16):
         tag.append(UInt8(0))
+    # The FFI also reports the tag length via ``tag_written``, but
+    # that out-parameter read-back is unreliable across the opaque
+    # FFI call (the optimizer folds it to the initial 0, which would
+    # truncate the tag to an empty slice and ship unauthenticated
+    # packets). The QUIC AEAD suites (AES-GCM / ChaCha20-Poly1305)
+    # always emit a 16-byte tag (RFC 9001 sec 5.3), and rustls has
+    # already copied those 16 bytes into ``tag``, so we keep the
+    # full buffer rather than depend on the readback.
     var written: Int = 0
-    var written_addr = Int(UnsafePointer(to=written))
     var rc = Int(
         f(
             session,
@@ -321,22 +328,13 @@ def _do_packet_encrypt(
             len(payload),
             Int(tag.unsafe_ptr()),
             len(tag),
-            written_addr,
+            Int(UnsafePointer(to=written)),
         )
     )
     if rc != 0:
         raise Error(
             String("flare_rustls_quic_packet_encrypt returned ") + String(rc)
         )
-    # Truncate the tag to the actual length the FFI wrote (rustls
-    # always emits a 16-byte tag for the suites we speak, but the
-    # FFI surface reports the length so the binding doesn't have
-    # to hard-code the assumption).
-    if written < len(tag):
-        var resized = List[UInt8]()
-        for i in range(written):
-            resized.append(tag[i])
-        return resized^
     return tag^
 
 
@@ -360,7 +358,12 @@ def _do_packet_decrypt(
         def(Int, c_int, UInt64, Int, Int, Int, Int, Int) thin abi("C") -> c_int
     ]("flare_rustls_quic_packet_decrypt")
     var plaintext_len: Int = 0
-    var addr = Int(UnsafePointer(to=plaintext_len))
+    # Keep the pointer in a named variable across the FFI call:
+    # a throwaway ``Int(UnsafePointer(to=...))`` temporary lets the
+    # optimizer treat ``plaintext_len`` as non-escaping and fold the
+    # write-back to the initial 0. Dereferencing the live pointer
+    # forces a reload of the value rustls actually wrote.
+    var len_ptr = UnsafePointer(to=plaintext_len)
     var rc = Int(
         f(
             session,
@@ -370,14 +373,14 @@ def _do_packet_decrypt(
             len(header),
             Int(payload.unsafe_ptr()),
             len(payload),
-            addr,
+            Int(len_ptr),
         )
     )
     if rc != 0:
         raise Error(
             String("flare_rustls_quic_packet_decrypt returned ") + String(rc)
         )
-    return plaintext_len
+    return len_ptr[]
 
 
 def _do_header_encrypt(

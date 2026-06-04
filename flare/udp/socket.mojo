@@ -37,6 +37,7 @@ from ..net._libc import (
     SOL_SOCKET,
     SO_BROADCAST,
     SOCKADDR_IN_SIZE,
+    MSG_DONTWAIT,
 )
 
 
@@ -256,6 +257,41 @@ struct UdpSocket(Movable):
                 raise Timeout("sendto")
             raise NetworkError(_strerror(e.value) + " (sendto)", Int(e.value))
         return Int(sent)
+
+    def try_recv_from(
+        mut self, buf: Span[UInt8, _]
+    ) raises -> Tuple[Int, SocketAddr]:
+        """Non-blocking ``recv_from`` via ``MSG_DONTWAIT``.
+
+        Identical to :meth:`recv_from` but never blocks: raises
+        :class:`Timeout` immediately when the socket queue is empty
+        (``EAGAIN`` / ``EWOULDBLOCK``). Used to drain a burst of
+        queued datagrams in one reactor tick without touching
+        ``SO_RCVTIMEO`` per call.
+        """
+        var peer_buf = stack_allocation[Int(SOCKADDR_IN_SIZE), UInt8]()
+        for i in range(Int(SOCKADDR_IN_SIZE)):
+            (peer_buf + i).init_pointee_copy(0)
+        var peer_len = stack_allocation[1, c_uint]()
+        peer_len.init_pointee_copy(SOCKADDR_IN_SIZE)
+
+        var got = _recvfrom(
+            self._socket.fd,
+            buf.unsafe_ptr(),
+            c_size_t(len(buf)),
+            MSG_DONTWAIT,
+            peer_buf,
+            peer_len,
+        )
+
+        if got < 0:
+            var e = get_errno()
+            if e == ErrNo.EAGAIN or e == ErrNo.EWOULDBLOCK:
+                raise Timeout("recvfrom")
+            raise NetworkError(_strerror(e.value) + " (recvfrom)", Int(e.value))
+
+        var sender = _sockaddr_to_socket_addr(peer_buf)
+        return Tuple(Int(got), sender)
 
     def recv_from(
         mut self, buf: Span[UInt8, _]

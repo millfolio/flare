@@ -108,6 +108,7 @@ def main() raises:
     # throttle a high-rate h2load -n large workload. The default
     # is conservative for general use.
     udp_cfg.initial_max_data = UInt64(32 * 1024 * 1024)
+    udp_cfg.initial_max_streams_bidi = UInt64(1 << 28)
     # Idle timeout long enough that h2load's per-connection
     # warmup + 5 measurement runs (10s + 5x30s = 160s) never
     # tickle the idle reaper.

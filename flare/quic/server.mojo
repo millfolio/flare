@@ -53,7 +53,20 @@ from .cc import (
     pacing_budget,
 )
 from .crypto import QuicAead
-from .frame import CryptoFrame, StreamFrame, encode_crypto
+from .frame import (
+    AckFrame,
+    AckRange,
+    CryptoFrame,
+    EcnCounts,
+    MaxDataFrame,
+    MaxStreamsFrame,
+    StreamFrame,
+    encode_ack,
+    encode_crypto,
+    encode_handshake_done,
+    encode_max_data,
+    encode_max_streams,
+)
 from .packet import (
     ConnectionId,
     LongHeader,
@@ -62,6 +75,7 @@ from .packet import (
     QUIC_VERSION_1,
     PACKET_TYPE_HANDSHAKE,
     encode_long_header,
+    parse_initial_extras,
     parse_long_header,
     parse_short_header,
 )
@@ -72,7 +86,11 @@ from .protection import (
     unprotect_handshake_packet,
     unprotect_initial_packet,
 )
-from .varint import encode_varint
+from .varint import decode_varint, encode_varint
+from .transport_params import (
+    empty_transport_parameters,
+    encode_transport_parameters,
+)
 from .state import (
     Connection,
     ConnectionEvents,
@@ -111,6 +129,109 @@ from ..tls._rustls_quic_ffi import (
     _do_take_crypto,
 )
 from .packet import encode_short_header
+
+
+# Flow-control grant windows kept ahead of consumption so the peer
+# never blocks mid-run (RFC 9000 sec 19.9 / 19.11). 64 MiB of
+# connection credit and 4096 extra bidi streams comfortably cover a
+# 30 s h2load run at the documented HTTP/3 rate.
+comptime _MAX_DATA_WINDOW: UInt64 = 64 * 1024 * 1024
+comptime _MAX_STREAMS_BIDI_WINDOW: UInt64 = 4096
+
+# Max datagrams drained per reactor tick. Bounds the time spent in
+# one tick so a single hot connection cannot starve the serve loop's
+# H3 pump / timer pass, while amortizing that per-tick work over a
+# burst of inbound datagrams.
+comptime _RX_BATCH: Int = 64
+
+# Cap on the number of disjoint ACK ranges tracked per connection.
+# Bounds the per-slot memory; the oldest (lowest) ranges are dropped
+# once the cap is hit (RFC 9000 sec 13.2.4 allows acking a subset).
+comptime _ACK_MAX_RANGES: Int = 32
+
+
+def _ack_record(mut flat: List[UInt64], pn: UInt64):
+    """Insert ``pn`` into the disjoint received-pn ranges held in
+    ``flat`` (a [low, high] pair list kept descending by ``high``).
+
+    Re-normalizes by collecting the pairs, adding ``[pn, pn]``,
+    sorting ascending, merging overlapping/adjacent ranges, capping
+    to :data:`_ACK_MAX_RANGES` (keeping the highest), then storing
+    back descending. The range count stays tiny so the cost is
+    negligible per packet.
+    """
+    var lows = List[UInt64]()
+    var highs = List[UInt64]()
+    var i = 0
+    while i + 1 < len(flat):
+        lows.append(flat[i])
+        highs.append(flat[i + 1])
+        i += 2
+    lows.append(pn)
+    highs.append(pn)
+    var n = len(lows)
+    # Insertion sort ascending by low (n is small, <= cap + 1).
+    for a in range(1, n):
+        var kl = lows[a]
+        var kh = highs[a]
+        var b = a - 1
+        while b >= 0 and lows[b] > kl:
+            lows[b + 1] = lows[b]
+            highs[b + 1] = highs[b]
+            b -= 1
+        lows[b + 1] = kl
+        highs[b + 1] = kh
+    var ml = List[UInt64]()
+    var mh = List[UInt64]()
+    for a in range(n):
+        if len(ml) > 0 and lows[a] <= mh[len(mh) - 1] + UInt64(1):
+            if highs[a] > mh[len(mh) - 1]:
+                mh[len(mh) - 1] = highs[a]
+        else:
+            ml.append(lows[a])
+            mh.append(highs[a])
+    var start = 0
+    if len(ml) > _ACK_MAX_RANGES:
+        start = len(ml) - _ACK_MAX_RANGES
+    flat.clear()
+    var c = len(ml) - 1
+    while c >= start:
+        flat.append(ml[c])
+        flat.append(mh[c])
+        c -= 1
+
+
+def _ack_from_ranges(flat: List[UInt64], ack_delay: UInt64) raises -> AckFrame:
+    """Build an :class:`AckFrame` from the descending [low, high]
+    pair list ``flat`` produced by :func:`_ack_record`.
+
+    The first (highest) range supplies ``largest_acknowledged`` and
+    ``first_ack_range``; each lower range becomes an explicit
+    gap/length pair per RFC 9000 sec 19.3.1.
+    """
+    if len(flat) < 2:
+        raise Error("_ack_from_ranges: empty range set")
+    var largest = flat[1]
+    var first_low = flat[0]
+    var ranges = List[AckRange]()
+    var prev_low = first_low
+    var i = 2
+    while i + 1 < len(flat):
+        var low = flat[i]
+        var high = flat[i + 1]
+        # gap = prev_smallest - this_largest - 2; length = high - low.
+        var gap = prev_low - high - UInt64(2)
+        var length = high - low
+        ranges.append(AckRange(gap=gap, length=length))
+        prev_low = low
+        i += 2
+    return AckFrame(
+        largest_acknowledged=largest,
+        ack_delay=ack_delay,
+        first_ack_range=largest - first_low,
+        ranges=ranges^,
+        ecn=List[EcnCounts](),
+    )
 
 
 def _inbound_level_for_datagram(datagram: Span[UInt8, _]) -> Int:
@@ -222,6 +343,83 @@ struct _SessionSlot(Copyable, Movable):
     :class:`flare.tls.rustls_quic.QuicEncryptionLevel` codepoints).
     Starts at ``INITIAL``; advances as the rustls KeyChange enum
     surfaces handshake + 1-RTT keys."""
+
+
+struct _CryptoStream(Copyable, Defaultable, Movable):
+    """Per-level inbound CRYPTO reassembly buffer.
+
+    QUIC delivers CRYPTO frames carrying an offset into a
+    per-encryption-level handshake byte stream (RFC 9000 sec 19.6),
+    and a peer may fragment + reorder them within a single packet.
+    rustls's ``read_hs`` consumes the handshake stream strictly in
+    order, so the bridge must reassemble the contiguous prefix
+    before feeding it. Out-of-order fragments are held until the
+    gap ahead of them fills.
+    """
+
+    var expected: UInt64
+    var frag_offsets: List[UInt64]
+    var frag_data: List[List[UInt8]]
+
+    def __init__(out self):
+        self.expected = UInt64(0)
+        self.frag_offsets = List[UInt64]()
+        self.frag_data = List[List[UInt8]]()
+
+    def insert(mut self, offset: UInt64, data: List[UInt8]):
+        """Buffer one CRYPTO fragment for later contiguous drain."""
+        self.frag_offsets.append(offset)
+        self.frag_data.append(data.copy())
+
+    def drain_contiguous(mut self) -> List[UInt8]:
+        """Pop and concatenate every buffered fragment that
+        extends the contiguous prefix from :attr:`expected`,
+        trimming overlaps and dropping fully-consumed fragments.
+        Returns the newly contiguous bytes (possibly empty)."""
+        var out = List[UInt8]()
+        var progress = True
+        while progress:
+            progress = False
+            for idx in range(len(self.frag_offsets)):
+                var o = self.frag_offsets[idx]
+                var dlen = UInt64(len(self.frag_data[idx]))
+                if o + dlen <= self.expected:
+                    self._swap_remove(idx)
+                    progress = True
+                    break
+                if o <= self.expected and o + dlen > self.expected:
+                    var start = Int(self.expected - o)
+                    for j in range(start, len(self.frag_data[idx])):
+                        out.append(self.frag_data[idx][j])
+                    self.expected = o + dlen
+                    self._swap_remove(idx)
+                    progress = True
+                    break
+        return out^
+
+    def _swap_remove(mut self, idx: Int):
+        var last = len(self.frag_offsets) - 1
+        if idx != last:
+            self.frag_offsets[idx] = self.frag_offsets[last]
+            self.frag_data[idx] = self.frag_data[last].copy()
+        _ = self.frag_offsets.pop()
+        _ = self.frag_data.pop()
+
+
+struct _CryptoReasm(Copyable, Defaultable, Movable):
+    """Per-slot CRYPTO reassembly across encryption levels.
+
+    Indexed by :class:`QuicEncryptionLevel` codepoint (INITIAL=0,
+    EARLY_DATA=1, HANDSHAKE=2, APPLICATION=3); EARLY_DATA carries
+    no CRYPTO but the slot is kept so indexing stays direct.
+    """
+
+    var levels: List[_CryptoStream]
+
+    def __init__(out self):
+        self.levels = List[_CryptoStream]()
+        for _ in range(4):
+            self.levels.append(_CryptoStream())
 
 
 # -- Configuration carrier ----------------------------------------------
@@ -889,6 +1087,11 @@ struct QuicListener(Movable):
     Handshake-level packet, AEAD-protects via
     :class:`RustlsQuicSession.packet_encrypt` at level 2, and
     emits via :meth:`send_to`."""
+    var crypto_reasm: List[_CryptoReasm]
+    """Per-slot inbound CRYPTO reassembly state (one per
+    encryption level). Parallel slab to :attr:`connections`;
+    reorders + coalesces inbound CRYPTO fragments so rustls's
+    in-order ``read_hs`` sees a contiguous handshake stream."""
     var tls_1rtt_egress_queues: List[List[UInt8]]
     """Per-slot outbound CRYPTO byte queue at the 1-RTT
     (APPLICATION) level. Populated by
@@ -903,6 +1106,39 @@ struct QuicListener(Movable):
     from the inbound datagram's sender. The egress path reads
     this to call :meth:`send_to(slot, ...)` without re-parsing
     the inbound datagram."""
+    var rx_1rtt_largest: List[UInt64]
+    """Per-slot largest 1-RTT packet number received. Parallel
+    slab to :attr:`connections`; feeds the ACK frame the egress
+    path emits so the peer's loss detection advances (RFC 9000
+    sec 13.2)."""
+    var rx_1rtt_ranges: List[List[UInt64]]
+    """Per-slot received 1-RTT packet numbers, stored as disjoint
+    ranges (flat [low, high] pairs, descending by high). The ACK
+    frame is built from these so we acknowledge only packets we
+    actually received: the peer skips packet numbers to detect
+    optimistic-ACK attacks (RFC 9000 sec 21.4), so acking a
+    contiguous span would acknowledge a never-sent number and the
+    peer would close with PROTOCOL_VIOLATION (sec 13.1)."""
+    var rx_1rtt_ack_pending: List[Bool]
+    """Per-slot flag: an ack-eliciting 1-RTT packet arrived and
+    has not yet been acknowledged. Cleared once the egress path
+    emits the ACK frame."""
+    var handshake_done_sent: List[Bool]
+    """Per-slot flag: the server has emitted HANDSHAKE_DONE
+    (RFC 9000 sec 19.20) once the 1-RTT keys installed. Confirms
+    the handshake so the peer stops retransmitting its Finished
+    and discards Handshake keys."""
+    var rx_stream_bytes: List[UInt64]
+    """Per-slot cumulative count of inbound stream payload bytes.
+    Feeds the connection-level MAX_DATA the egress path advertises
+    so the peer's flow-control window never closes (RFC 9000 sec
+    19.9)."""
+    var rx_bidi_stream_count: List[UInt64]
+    """Per-slot count of client-initiated bidi streams observed
+    (largest ``(stream_id >> 2) + 1``). Feeds the MAX_STREAMS_BIDI
+    grant (RFC 9000 sec 19.11) so HTTP/3, which opens one bidi
+    stream per request, can keep opening streams past the initial
+    transport-parameter limit."""
     var h3_connections: List[H3Connection]
     """Per-slot HTTP/3 connection driver. Parallel slab to
     :attr:`connections` -- one :class:`flare.h3.H3Connection`
@@ -960,8 +1196,15 @@ struct QuicListener(Movable):
         self.tls_sessions = List[_SessionSlot]()
         self.tls_egress_queues = List[List[UInt8]]()
         self.tls_handshake_egress_queues = List[List[UInt8]]()
+        self.crypto_reasm = List[_CryptoReasm]()
         self.tls_1rtt_egress_queues = List[List[UInt8]]()
         self.peer_addrs = List[SocketAddr]()
+        self.rx_1rtt_largest = List[UInt64]()
+        self.rx_1rtt_ranges = List[List[UInt64]]()
+        self.rx_1rtt_ack_pending = List[Bool]()
+        self.handshake_done_sent = List[Bool]()
+        self.rx_stream_bytes = List[UInt64]()
+        self.rx_bidi_stream_count = List[UInt64]()
         self.h3_connections = List[H3Connection]()
         self.h3_response_egress = Dict[String, List[UInt8]]()
         self.timer_wheel = TimerWheel(now_ms=UInt64(0))
@@ -1077,13 +1320,76 @@ struct QuicListener(Movable):
         :meth:`_dispatch_crypto_frames` and the idle timer re-arms.
         """
         var now_us = UInt64(0)
-        var inbound_lvl = _inbound_level_for_datagram(datagram)
+        # A datagram may carry several coalesced QUIC packets
+        # (RFC 9000 sec 12.2): e.g. an Initial-level ACK ahead of a
+        # Handshake packet carrying the client Finished, or a
+        # Handshake packet ahead of the first 1-RTT request. Each
+        # long-header packet's length is self-describing, so walk
+        # the datagram packet by packet; a short-header (1-RTT)
+        # packet is always last and runs to the datagram end.
+        var n = len(datagram)
+        var offset = 0
+        var processed_any = False
+        while offset < n:
+            var first = Int(datagram[offset])
+            # A zero first byte is PADDING that trails the last real
+            # packet; nothing further to parse.
+            if first == 0:
+                break
+            var sub = datagram[offset:]
+            var lvl = _inbound_level_for_datagram(sub)
+            var is_long = (first & 0x80) != 0
+            var packet_len: Int
+            if is_long:
+                try:
+                    var lh = parse_long_header(sub)
+                    if lvl == QuicEncryptionLevel.INITIAL:
+                        var ie = parse_initial_extras(sub, lh.payload_offset)
+                        packet_len = (
+                            lh.payload_offset
+                            + ie.consumed
+                            + Int(ie.payload_length)
+                        )
+                    elif lvl == QuicEncryptionLevel.HANDSHAKE:
+                        var lv = decode_varint(sub[lh.payload_offset :])
+                        packet_len = (
+                            lh.payload_offset + lv.consumed + Int(lv.value)
+                        )
+                    else:
+                        # 0-RTT / Retry: stop the coalescing scan.
+                        break
+                except:
+                    break
+                if packet_len <= 0 or offset + packet_len > n:
+                    break
+            else:
+                packet_len = n - offset
+            self._process_one_packet(
+                slot, datagram[offset : offset + packet_len], lvl, now_us
+            )
+            processed_any = True
+            offset += packet_len
+        if processed_any:
+            _ = self.schedule_idle_timeout(slot)
+
+    def _process_one_packet(
+        mut self,
+        slot: Int,
+        packet: Span[UInt8, _],
+        inbound_lvl: Int,
+        now_us: UInt64,
+    ) raises:
+        """Decrypt + dispatch a single (already de-coalesced) QUIC
+        packet at ``inbound_lvl``. Initial decrypts in the sans-I/O
+        connection; Handshake + 1-RTT decrypt through the slot's
+        rustls session. Failures drop silently per RFC 9001 sec 5.2.
+        """
         var conn = self.connections[slot].copy()
         var events = empty_events()
         var ok = True
         if inbound_lvl == QuicEncryptionLevel.INITIAL:
             try:
-                events = conn.handle_packet(datagram, now_us)
+                events = conn.handle_packet(packet, now_us)
             except:
                 ok = False
         elif inbound_lvl == QuicEncryptionLevel.HANDSHAKE:
@@ -1092,10 +1398,7 @@ struct QuicListener(Movable):
             else:
                 try:
                     var dec = self._decrypt_post_initial(
-                        slot,
-                        datagram,
-                        inbound_lvl,
-                        conn.local_cid.length(),
+                        slot, packet, inbound_lvl, conn.local_cid.length()
                     )
                     events = conn.dispatch_plaintext(
                         Span[UInt8, _](dec[0]), now_us, dec[1]
@@ -1108,14 +1411,28 @@ struct QuicListener(Movable):
             else:
                 try:
                     var dec = self._decrypt_post_initial(
-                        slot,
-                        datagram,
-                        inbound_lvl,
-                        conn.local_cid.length(),
+                        slot, packet, inbound_lvl, conn.local_cid.length()
                     )
+                    # Clear the state-machine ack-eliciting marker so
+                    # it reflects only THIS packet after dispatch.
+                    conn.conn.ack_pending = False
                     events = conn.dispatch_plaintext(
                         Span[UInt8, _](dec[0]), now_us, dec[1]
                     )
+                    # Record the received pn into the ACK ranges so
+                    # the egress ACK reflects exactly what arrived,
+                    # gaps and all (RFC 9000 sec 13.2 / 21.4).
+                    if dec[1] >= self.rx_1rtt_largest[slot]:
+                        self.rx_1rtt_largest[slot] = dec[1]
+                    _ack_record(self.rx_1rtt_ranges[slot], dec[1])
+                    # Only owe an ACK for ack-eliciting packets (a
+                    # request's STREAM/CRYPTO frames). Acking the
+                    # peer's pure-ACK packets would, since our ACK
+                    # also carries MAX_DATA/MAX_STREAMS (ack-
+                    # eliciting), provoke an endless ack-of-ack storm
+                    # (RFC 9000 sec 13.2.1).
+                    if conn.conn.ack_pending:
+                        self.rx_1rtt_ack_pending[slot] = True
                 except:
                     ok = False
         else:
@@ -1125,7 +1442,6 @@ struct QuicListener(Movable):
             return
         self._dispatch_crypto_frames(slot, events, inbound_lvl)
         self._route_h3_stream_chunks(slot, events)
-        _ = self.schedule_idle_timeout(slot)
 
     def _decrypt_post_initial(
         mut self,
@@ -1154,11 +1470,28 @@ struct QuicListener(Movable):
         var handle = self.tls_sessions[slot].handle
         if handle == 0:
             raise Error("_decrypt_post_initial: NULL session handle")
+        # pn_offset and packet_end depend on the header form. A
+        # long-header Handshake packet carries a Length varint
+        # after the SCID that bounds the protected payload (so the
+        # AEAD ciphertext stops at packet_end, not end-of-datagram,
+        # which matters when packets are coalesced or padded). A
+        # short-header 1-RTT packet has no Length field and is
+        # always last in its datagram (RFC 9000 sec 12.2), so it runs
+        # to the datagram end.
         var pn_offset: Int
+        var packet_end: Int
         if level == QuicEncryptionLevel.HANDSHAKE:
-            pn_offset = parse_long_header(datagram).payload_offset
+            var lh = parse_long_header(datagram)
+            var len_var = decode_varint(datagram[lh.payload_offset :])
+            pn_offset = lh.payload_offset + len_var.consumed
+            packet_end = pn_offset + Int(len_var.value)
+            if packet_end > len(datagram):
+                raise Error(
+                    "_decrypt_post_initial: handshake length exceeds datagram"
+                )
         else:
             pn_offset = parse_short_header(datagram, dcid_length).payload_offset
+            packet_end = len(datagram)
         # The HP sample sits 4 bytes past the pn field start
         # (RFC 9001 sec 5.4.2); that window must fit the datagram.
         var sample_offset = pn_offset + 4
@@ -1203,10 +1536,19 @@ struct QuicListener(Movable):
         for i in range(pn_length):
             header.append(pn_local[i])
         var ciphertext_start = pn_offset + pn_length
+        if ciphertext_start > packet_end:
+            raise Error("_decrypt_post_initial: pn length exceeds packet end")
         var payload = List[UInt8]()
-        for i in range(ciphertext_start, len(datagram)):
+        for i in range(ciphertext_start, packet_end):
             payload.append(datagram[i])
-        var plaintext_len = _do_packet_decrypt(
+        # decrypt_in_place verifies + strips the 16-byte AEAD tag,
+        # writing plaintext over the ciphertext prefix of ``payload``.
+        # The FFI also reports the plaintext length, but the QUIC
+        # AEAD suites (AES-GCM / ChaCha20-Poly1305) always use a
+        # 16-byte tag (RFC 9001 sec 5.3), so the plaintext is exactly
+        # the leading ``len(payload) - 16`` bytes; we slice that
+        # directly rather than depend on the out-parameter readback.
+        _ = _do_packet_decrypt(
             self.tls_acceptor._lib,
             handle,
             level,
@@ -1214,6 +1556,10 @@ struct QuicListener(Movable):
             header,
             payload,
         )
+        comptime QUIC_AEAD_TAG_LEN = 16
+        var plaintext_len = len(payload) - QUIC_AEAD_TAG_LEN
+        if plaintext_len < 0:
+            raise Error("_decrypt_post_initial: payload shorter than AEAD tag")
         var plaintext = List[UInt8]()
         for i in range(plaintext_len):
             plaintext.append(payload[i])
@@ -1254,27 +1600,27 @@ struct QuicListener(Movable):
         if handle == 0:
             return
 
-        # Feed inbound CRYPTO frame bytes at the level the
-        # parent _handle_inbound just decrypted at. All CRYPTO
-        # frames in a single ConnectionEvents batch belong to
-        # the same encryption level (the level of the parent
-        # packet); QUIC explicitly forbids mixing CRYPTO levels
-        # across packets at the protocol layer (RFC 9001
-        # §4.1.3), so the caller supplies the level rather than
-        # the sans-I/O state machine carrying a per-frame tag.
-        for i in range(len(events.crypto_frames)):
-            var chunk = List[UInt8]()
-            for j in range(len(events.crypto_frames[i].data)):
-                chunk.append(events.crypto_frames[i].data[j])
-            var rc = _do_feed_crypto(
-                self.tls_acceptor._lib, handle, inbound_lvl, chunk
-            )
-            if rc != 0:
-                # rustls rejected the bytes (bad TLS grammar) --
-                # silent drop per RFC 9001 §5.2. The session
-                # level does not advance, which is what the
-                # post-Initial gating below reads.
-                continue
+        # Reassemble inbound CRYPTO into a contiguous, in-order
+        # byte stream before feeding rustls. A peer may fragment +
+        # reorder CRYPTO frames within a packet (RFC 9000 sec 19.6);
+        # rustls's read_hs consumes the handshake stream strictly
+        # in order, so out-of-order fragments are buffered until
+        # the gap ahead of them fills. All frames in one batch
+        # share the parent packet's encryption level (RFC 9001
+        # sec 4.1.3), so the caller supplies that level.
+        if inbound_lvl >= 0 and inbound_lvl < 4:
+            var reasm = self.crypto_reasm[slot].copy()
+            for i in range(len(events.crypto_frames)):
+                reasm.levels[inbound_lvl].insert(
+                    events.crypto_frames[i].offset,
+                    events.crypto_frames[i].data,
+                )
+            var ordered = reasm.levels[inbound_lvl].drain_contiguous()
+            self.crypto_reasm[slot] = reasm^
+            if len(ordered) > 0:
+                _ = _do_feed_crypto(
+                    self.tls_acceptor._lib, handle, inbound_lvl, ordered
+                )
 
         # Drain rustls's outbound CRYPTO bytes at every level
         # rustls might have buffered for us. The KeyChange-driven
@@ -1377,6 +1723,17 @@ struct QuicListener(Movable):
             var is_uni = (sid & 0x2) != 0
             var is_fin = events.stream_chunks[i].fin
             var payload = events.stream_chunks[i].data.copy()
+            # Connection + stream flow-control accounting (RFC 9000
+            # sec 4). Track total inbound stream bytes for MAX_DATA
+            # and the client bidi-stream high-water mark (id & 3 == 0)
+            # for MAX_STREAMS_BIDI; both are advertised on the next
+            # ACK so the peer never blocks over a long run.
+            if slot < len(self.rx_stream_bytes):
+                self.rx_stream_bytes[slot] += UInt64(len(payload))
+            if not is_uni and slot < len(self.rx_bidi_stream_count):
+                var count = UInt64((sid >> 2) + 1)
+                if count > self.rx_bidi_stream_count[slot]:
+                    self.rx_bidi_stream_count[slot] = count
             if len(payload) > 0:
                 if is_uni:
                     h3.feed_uni_stream_chunk(sid, payload^)
@@ -1516,17 +1873,24 @@ struct QuicListener(Movable):
         )
         var slot = len(self.connections)
         self.connections.append(qc^)
-        self.tls_sessions.append(self._new_session_slot())
+        self.tls_sessions.append(self._new_session_slot(local_cid))
         self.tls_egress_queues.append(List[UInt8]())
         self.tls_handshake_egress_queues.append(List[UInt8]())
+        self.crypto_reasm.append(_CryptoReasm())
         self.tls_1rtt_egress_queues.append(List[UInt8]())
         self.peer_addrs.append(peer)
+        self.rx_1rtt_largest.append(UInt64(0))
+        self.rx_1rtt_ranges.append(List[UInt64]())
+        self.rx_1rtt_ack_pending.append(False)
+        self.handshake_done_sent.append(False)
+        self.rx_stream_bytes.append(UInt64(0))
+        self.rx_bidi_stream_count.append(UInt64(0))
         self.h3_connections.append(H3Connection())
         self.cid_table.register(cid_to_hex(local_cid), slot)
         _ = self.schedule_idle_timeout(slot)
         return slot
 
-    def _new_session_slot(mut self) -> _SessionSlot:
+    def _new_session_slot(mut self, local_cid: ConnectionId) -> _SessionSlot:
         """Materialize a per-slot rustls QUIC session.
 
         Empty-PEM configurations (the default
@@ -1534,40 +1898,80 @@ struct QuicListener(Movable):
         suite + fuzz harness rely on) leave the acceptor's
         opaque handle at 0; this method short-circuits to the
         NULL-handle sentinel slot. Production paths with a real
-        PEM cert call into :func:`_do_accept` with an empty
-        transport-parameters blob; any FFI rejection also falls
-        through to the NULL sentinel so the slab stays in
-        lockstep with :attr:`connections`.
+        PEM cert encode the server's QUIC transport parameters
+        (RFC 9000 sec 18) and hand them to :func:`_do_accept` so
+        rustls emits the mandatory ``quic_transport_parameters``
+        TLS extension; any FFI rejection falls through to the
+        NULL sentinel so the slab stays in lockstep with
+        :attr:`connections`.
         """
         if self.tls_acceptor._opaque_handle == 0:
             return _SessionSlot(handle=0, level=QuicEncryptionLevel.INITIAL)
-        var empty_tp = List[UInt8]()
+        var tp_blob: List[UInt8]
+        try:
+            tp_blob = self._encode_server_transport_params(local_cid)
+        except:
+            return _SessionSlot(handle=0, level=QuicEncryptionLevel.INITIAL)
         var handle = _do_accept(
-            self.tls_acceptor._lib, self.tls_acceptor._opaque_handle, empty_tp
+            self.tls_acceptor._lib, self.tls_acceptor._opaque_handle, tp_blob
         )
         return _SessionSlot(handle=handle, level=QuicEncryptionLevel.INITIAL)
 
+    def _encode_server_transport_params(
+        self, local_cid: ConnectionId
+    ) raises -> List[UInt8]:
+        """Encode the server's QUIC transport parameters for the
+        TLS handshake.
+
+        ``original_destination_connection_id`` + ``initial_source_
+        connection_id`` are both the client's first-Initial DCID:
+        the server reuses that CID as its own source CID (see
+        :meth:`_accept_initial`), so both equal ``local_cid``.
+        The flow-control + stream limits come from
+        :attr:`config`; per-stream data windows mirror the
+        connection-level ``initial_max_data``. The peer rejects a
+        handshake whose transport parameters omit the source-CID
+        (RFC 9000 sec 7.3), so these are always emitted.
+        """
+        var tp = empty_transport_parameters()
+        tp.original_destination_connection_id = local_cid.bytes.copy()
+        tp.initial_source_connection_id = local_cid.bytes.copy()
+        tp.max_idle_timeout = Optional(self.config.max_idle_timeout_ms)
+        tp.initial_max_data = Optional(self.config.initial_max_data)
+        tp.initial_max_stream_data_bidi_local = Optional(
+            self.config.initial_max_data
+        )
+        tp.initial_max_stream_data_bidi_remote = Optional(
+            self.config.initial_max_data
+        )
+        tp.initial_max_stream_data_uni = Optional(self.config.initial_max_data)
+        tp.initial_max_streams_bidi = Optional(
+            self.config.initial_max_streams_bidi
+        )
+        tp.initial_max_streams_uni = Optional(
+            self.config.initial_max_streams_uni
+        )
+        tp.active_connection_id_limit = Optional(UInt64(2))
+        return encode_transport_parameters(tp)
+
     def tick(mut self, timeout_ms: Int = 100) raises -> Bool:
-        """Drain at most one inbound datagram and pump egress.
+        """Drain a burst of inbound datagrams and pump egress.
 
         Reactor I/O loop step:
 
-        1. ``recv_from`` -- pull one datagram off the socket (or
-           time out cleanly after ``timeout_ms``).
-        2. ``dispatch_datagram`` -- route by DCID; the matched
-           slot's :meth:`_handle_inbound` advances the sans-I/O
-           state machine and surfaces inbound CRYPTO frames; the
-           bridge feeds them to rustls and drains outbound CRYPTO
-           bytes into :attr:`tls_egress_queues`.
-        3. ``drain_all_egress`` -- every slot with pending bytes
-           gets a server Initial packet protected via
-           :func:`protect_initial_packet` and emitted through
-           :meth:`send_to`.
+        1. One blocking ``recv_from`` (``SO_RCVTIMEO``) wakes the
+           tick when a datagram arrives or times out cleanly.
+        2. Then ``try_recv_from`` (``MSG_DONTWAIT``) drains the
+           rest of the socket queue, up to :data:`_RX_BATCH`
+           datagrams, so the per-tick H3 pump / timer / egress
+           bookkeeping in the serve loop is amortized over the
+           whole burst instead of paid per datagram.
+        3. Each datagram routes through :meth:`dispatch_datagram`
+           by DCID; the matched slot's :meth:`_drain_and_send`
+           flushes its ACK / response.
 
-        Returns ``True`` if a datagram was received + dispatched,
-        ``False`` if ``recv_from`` timed out. ``timeout_ms`` is
-        applied via ``SO_RCVTIMEO``; the default 100 ms is the
-        same shutdown-poll cadence :meth:`run` uses.
+        Returns ``True`` if at least one datagram was dispatched,
+        ``False`` if the initial ``recv_from`` timed out.
         """
         self._socket.set_recv_timeout(timeout_ms)
         var buf = List[UInt8]()
@@ -1595,6 +1999,24 @@ struct QuicListener(Movable):
         var slot = self.dispatch_datagram(Span[UInt8, _](buf[:got]), sender)
         if slot >= 0:
             _ = self._drain_and_send(slot)
+        # Drain the rest of the socket queue without blocking so a
+        # high-rate sender's burst is handled in one tick.
+        for _ in range(_RX_BATCH - 1):
+            var nb_got: Int
+            var nb_sender: SocketAddr
+            try:
+                var nb = self._socket.try_recv_from(Span[UInt8, _](buf))
+                nb_got = nb[0]
+                nb_sender = nb[1]
+            except:
+                break
+            if nb_got <= 0:
+                break
+            var nslot = self.dispatch_datagram(
+                Span[UInt8, _](buf[:nb_got]), nb_sender
+            )
+            if nslot >= 0:
+                _ = self._drain_and_send(nslot)
         return True
 
     def send_to(self, datagram: Span[UInt8, _], addr: SocketAddr) raises -> Int:
@@ -1702,6 +2124,20 @@ struct QuicListener(Movable):
                 _ = self.send_to(Span[UInt8, _](rtt_dg), peer)
                 self.tls_1rtt_egress_queues[slot] = List[UInt8]()
                 emitted = True
+        # 1-RTT ACK (+ HANDSHAKE_DONE once). Only emit once a real
+        # 1-RTT packet has arrived: acking a packet number the peer
+        # never sent is a protocol violation (RFC 9000 sec 13.1).
+        # Without the ACK the peer's loss detection stalls and it
+        # retransmits forever (sec 13.2). HANDSHAKE_DONE (sec 19.20)
+        # rides the first ACK to confirm the handshake so the peer
+        # discards Handshake keys.
+        if self._has_1rtt_keys(slot) and self.rx_1rtt_ack_pending[slot]:
+            var ack_dg = self._build_1rtt_ack(slot)
+            if len(ack_dg) > 0:
+                _ = self.send_to(Span[UInt8, _](ack_dg), peer)
+                self.rx_1rtt_ack_pending[slot] = False
+                self.handshake_done_sent[slot] = True
+                emitted = True
         # H3 response STREAM frames at 1-RTT (the user-visible
         # response path).  Drain each pending (slot, stream_id)
         # entry, wrap in a STREAM frame, encode into a 1-RTT
@@ -1709,6 +2145,44 @@ struct QuicListener(Movable):
         if self._drain_h3_response_egress(slot, peer):
             emitted = True
         return emitted
+
+    def _has_1rtt_keys(self, slot: Int) -> Bool:
+        """True if the slot has installed 1-RTT traffic secrets
+        (handshake complete). Gates the ACK / HANDSHAKE_DONE egress.
+        """
+        if slot < 0 or slot >= len(self.connections):
+            return False
+        return len(self.connections[slot].tx_1rtt_secret) > 0
+
+    def _build_1rtt_ack(mut self, slot: Int) raises -> List[UInt8]:
+        """Build a protected 1-RTT packet carrying an ACK of the
+        largest received 1-RTT pn, plus HANDSHAKE_DONE the first
+        time. Empty list when keys aren't installed yet.
+        """
+        if slot < 0 or slot >= len(self.connections):
+            return List[UInt8]()
+        if len(self.rx_1rtt_ranges[slot]) < 2:
+            return List[UInt8]()
+        var ack = _ack_from_ranges(self.rx_1rtt_ranges[slot], UInt64(0))
+        var plaintext = List[UInt8]()
+        encode_ack(ack, plaintext)
+        if not self.handshake_done_sent[slot]:
+            encode_handshake_done(plaintext)
+        # Advertise flow-control credit well ahead of consumption so
+        # the peer never blocks (RFC 9000 sec 19.9 / 19.11). Both
+        # ceilings are monotonic: rx_stream_bytes and
+        # rx_bidi_stream_count only grow.
+        var max_data = MaxDataFrame(
+            maximum_data=self.rx_stream_bytes[slot] + _MAX_DATA_WINDOW
+        )
+        encode_max_data(max_data, plaintext)
+        var max_streams = MaxStreamsFrame(
+            unidirectional=False,
+            maximum_streams=self.rx_bidi_stream_count[slot]
+            + _MAX_STREAMS_BIDI_WINDOW,
+        )
+        encode_max_streams(max_streams, plaintext)
+        return self._build_1rtt_response(slot, plaintext^)
 
     def _drain_h3_response_egress(
         mut self, slot: Int, peer: SocketAddr

@@ -212,7 +212,10 @@ def test_flow_control_violation_raises() raises:
     assert_true(raised)
 
 
-def test_ack_frame_advances_largest_received() raises:
+def test_ack_frame_advances_largest_acked() raises:
+    # An inbound ACK names the largest packet WE sent that the peer
+    # received -- it advances largest_acked_by_peer and must leave
+    # largest_received_packet (our inbound pn-decode base) untouched.
     var conn = new_connection()
     var ack = AckFrame(
         largest_acknowledged=UInt64(42),
@@ -225,7 +228,8 @@ def test_ack_frame_advances_largest_received() raises:
     encode_ack(ack, buf)
     var events = empty_events()
     _ = handle_frame_buf(conn, Span[UInt8, _](buf), UInt64(100), events)
-    assert_equal(conn.largest_received_packet, UInt64(42))
+    assert_equal(conn.largest_acked_by_peer, UInt64(42))
+    assert_equal(conn.largest_received_packet, UInt64(0))
 
 
 def main() raises:
@@ -241,5 +245,5 @@ def main() raises:
     test_connection_close_explicit_helper()
     test_idle_timeout_detection()
     test_flow_control_violation_raises()
-    test_ack_frame_advances_largest_received()
+    test_ack_frame_advances_largest_acked()
     print("test_quic_state: 13 passed")

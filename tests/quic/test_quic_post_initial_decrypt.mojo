@@ -34,6 +34,7 @@ from flare.quic import (
     encode_varint,
 )
 from flare.tls import QuicEncryptionLevel, RustlsQuicConfig
+from flare.quic.server import _ack_record, _ack_from_ranges
 
 
 def _load_fixture_pem() raises -> Tuple[String, String]:
@@ -210,9 +211,55 @@ def test_handle_inbound_drops_1rtt_without_sentinel() raises:
     listener.close()
 
 
+def test_ack_ranges_exclude_skipped_pn() raises:
+    """An ACK built from received pns 0,1,2,3,5,6,7 (the peer
+    skipped pn 4 as an optimistic-ACK probe, RFC 9000 sec 21.4)
+    must NOT acknowledge pn 4: it splits into two ranges with a
+    one-packet gap, so the peer does not see its skipped number
+    acked and the connection stays open."""
+    var flat = List[UInt64]()
+    for pn in [0, 1, 2, 3, 5, 6, 7]:
+        _ack_record(flat, UInt64(pn))
+    var ack = _ack_from_ranges(flat, UInt64(0))
+    assert_equal(Int(ack.largest_acknowledged), 7)
+    # First (highest) range [5, 7]: first_ack_range = 7 - 5 = 2.
+    assert_equal(Int(ack.first_ack_range), 2)
+    assert_equal(len(ack.ranges), 1)
+    # gap 0 = exactly one unacked packet (pn 4); length 3 = [0, 3].
+    assert_equal(Int(ack.ranges[0].gap), 0)
+    assert_equal(Int(ack.ranges[0].length), 3)
+
+
+def test_ack_ranges_contiguous_single_range() raises:
+    """Contiguous receipt collapses to one range with no explicit
+    sub-ranges, regardless of insertion order."""
+    var flat = List[UInt64]()
+    for pn in [3, 0, 4, 1, 2]:
+        _ack_record(flat, UInt64(pn))
+    var ack = _ack_from_ranges(flat, UInt64(0))
+    assert_equal(Int(ack.largest_acknowledged), 4)
+    assert_equal(Int(ack.first_ack_range), 4)
+    assert_equal(len(ack.ranges), 0)
+
+
+def test_ack_ranges_duplicate_pn_is_idempotent() raises:
+    """Re-recording an already-tracked pn does not corrupt the
+    range set (duplicate datagrams are common under loss)."""
+    var flat = List[UInt64]()
+    for pn in [5, 5, 6, 5, 7, 6]:
+        _ack_record(flat, UInt64(pn))
+    var ack = _ack_from_ranges(flat, UInt64(0))
+    assert_equal(Int(ack.largest_acknowledged), 7)
+    assert_equal(Int(ack.first_ack_range), 2)
+    assert_equal(len(ack.ranges), 0)
+
+
 def main() raises:
     test_decrypt_post_initial_raises_slot_out_of_range()
     test_decrypt_post_initial_raises_on_truncated_handshake()
     test_handle_inbound_drops_handshake_without_sentinel()
     test_handle_inbound_drops_1rtt_without_sentinel()
-    print("test_quic_post_initial_decrypt: 4 passed")
+    test_ack_ranges_exclude_skipped_pn()
+    test_ack_ranges_contiguous_single_range()
+    test_ack_ranges_duplicate_pn_is_idempotent()
+    print("test_quic_post_initial_decrypt: 7 passed")

@@ -85,6 +85,11 @@ comptime TIMEVAL_SIZE: c_uint = 16  # 8 bytes tv_sec + 8 bytes tv_usec on 64-bit
 comptime MSG_NOSIGNAL: c_int = c_int(
     _pm["MSG_NOSIGNAL", linux=0x4000, macos=0]()
 )
+# Per-call non-blocking flag for recv/send so a batched drain loop
+# avoids changing SO_RCVTIMEO each iteration.
+comptime MSG_DONTWAIT: c_int = c_int(
+    _pm["MSG_DONTWAIT", linux=0x40, macos=0x80]()
+)
 # macOS: MSG_NOSIGNAL = 0 (not supported). Use SO_NOSIGPIPE socket option to
 # suppress SIGPIPE delivery when writing to a broken connection.
 comptime SO_NOSIGPIPE: c_int = c_int(
