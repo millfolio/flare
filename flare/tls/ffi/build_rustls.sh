@@ -34,7 +34,16 @@ WRAPPER_DIR="$SCRIPT_DIR/rustls_wrapper"
 BUILD_DIR="$SCRIPT_DIR/../../../build"
 TARGET="$BUILD_DIR/libflare_rustls_quic.so"
 INSTALLED="$CONDA_PREFIX/lib/libflare_rustls_quic.so"
-CARGO_OUTPUT="$WRAPPER_DIR/target/release/libflare_rustls_quic.so"
+# cargo names the cdylib per the host platform: libflare_rustls_quic.so on
+# Linux, libflare_rustls_quic.dylib on macOS. The installed/canonical name
+# stays .so on both (find_flare_lib resolves .so everywhere, and macOS dyld
+# loads a Mach-O dylib regardless of the file extension), so only the cargo
+# source path is platform-dependent.
+if [[ "$(uname)" == "Darwin" ]]; then
+    CARGO_OUTPUT="$WRAPPER_DIR/target/release/libflare_rustls_quic.dylib"
+else
+    CARGO_OUTPUT="$WRAPPER_DIR/target/release/libflare_rustls_quic.so"
+fi
 CARGO_TOML="$WRAPPER_DIR/Cargo.toml"
 CARGO_LOCK="$WRAPPER_DIR/Cargo.lock"
 SOURCE="$WRAPPER_DIR/src/lib.rs"
