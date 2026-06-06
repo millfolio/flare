@@ -82,7 +82,7 @@ def libc_nanosleep_ms(ms: Int) -> Int:
     # libc-facing pointers; this keeps the optimiser from reordering
     # loads through the ``ts`` page across the syscall boundary.
     var null_rem = UnsafePointer[Int64, MutExternalOrigin](
-        unsafe_from_address=0
+        unsafe_from_address=Int(0)
     )
     var ts_ext = UnsafePointer[Int64, MutExternalOrigin](
         unsafe_from_address=Int(ts)

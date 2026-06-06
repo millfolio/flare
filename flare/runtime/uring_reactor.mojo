@@ -515,7 +515,7 @@ struct UringReactor(Movable):
             # mode is fully no-op on shutdown too.
             self._wake_fd = INVALID_FD
             self._wake_buf = UnsafePointer[UInt8, MutExternalOrigin](
-                unsafe_from_address=0
+                unsafe_from_address=Int(0)
             )
         self._wake_armed = False
 

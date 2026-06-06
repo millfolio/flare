@@ -260,7 +260,7 @@ def _worker_entry[H: Handler & Copyable](arg: _OpaquePtr) -> _OpaquePtr:
                     stopping_ptr[],
                 )
                 return UnsafePointer[UInt8, MutExternalOrigin](
-                    unsafe_from_address=0
+                    unsafe_from_address=Int(0)
                 )
         # Pick the unified (HTTP/1.1 + HTTP/2 auto-dispatch)
         # reactor loop or the HTTP/1.1-only loop based on what
@@ -287,7 +287,7 @@ def _worker_entry[H: Handler & Copyable](arg: _OpaquePtr) -> _OpaquePtr:
 
     # Ctx ownership: the Scheduler main thread destroys + frees every
     # ctx AFTER joining the worker, so we don't touch it here.
-    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=0)
+    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=Int(0))
 
 
 # ── Scheduler ────────────────────────────────────────────────────────────────
@@ -376,7 +376,7 @@ struct Scheduler[H: Handler & Copyable](Movable):
     def __init__(out self):
         """Build an empty scheduler; use ``Scheduler.start`` instead."""
         self._workers_ptr = UnsafePointer[ThreadHandle, MutExternalOrigin](
-            unsafe_from_address=0
+            unsafe_from_address=Int(0)
         )
         self._workers_len = 0
         self._shared_listener_addr = 0
@@ -509,7 +509,7 @@ struct Scheduler[H: Handler & Copyable](Movable):
 
         var listener_fd: Int = -1
         var listener_ptr = UnsafePointer[TcpListener, MutExternalOrigin](
-            unsafe_from_address=0
+            unsafe_from_address=Int(0)
         )
         # Both the io_uring buffer-ring path and the opt-in epoll
         # reuseport mode pre-bind per-worker SO_REUSEPORT listeners
@@ -629,7 +629,7 @@ struct Scheduler[H: Handler & Copyable](Movable):
                     (s._workers_ptr + j).destroy_pointee()
                 _scheduler_free_raw(s._workers_ptr.bitcast[UInt8]())
                 s._workers_ptr = UnsafePointer[ThreadHandle, MutExternalOrigin](
-                    unsafe_from_address=0
+                    unsafe_from_address=Int(0)
                 )
                 s._workers_len = 0
                 # Destroy + free EVERY ctx (the ones that workers claimed
@@ -699,7 +699,7 @@ struct Scheduler[H: Handler & Copyable](Movable):
         if self._workers_len > 0:
             _scheduler_free_raw(self._workers_ptr.bitcast[UInt8]())
             self._workers_ptr = UnsafePointer[ThreadHandle, MutExternalOrigin](
-                unsafe_from_address=0
+                unsafe_from_address=Int(0)
             )
             self._workers_len = 0
 
@@ -967,7 +967,7 @@ def _static_worker_entry(arg: _OpaquePtr) -> _OpaquePtr:
     except:
         pass
 
-    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=0)
+    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=Int(0))
 
 
 def _static_scheduler_free_ctxs(addrs: List[Int]):
@@ -1024,7 +1024,7 @@ struct StaticScheduler(Movable):
     def __init__(out self):
         """Build an empty scheduler; use ``StaticScheduler.start``."""
         self._workers_ptr = UnsafePointer[ThreadHandle, MutExternalOrigin](
-            unsafe_from_address=0
+            unsafe_from_address=Int(0)
         )
         self._workers_len = 0
         self._shared_listener_addr = 0
@@ -1174,7 +1174,7 @@ struct StaticScheduler(Movable):
                     (s._workers_ptr + j).destroy_pointee()
                 _scheduler_free_raw(s._workers_ptr.bitcast[UInt8]())
                 s._workers_ptr = UnsafePointer[ThreadHandle, MutExternalOrigin](
-                    unsafe_from_address=0
+                    unsafe_from_address=Int(0)
                 )
                 s._workers_len = 0
                 _static_scheduler_free_ctxs(s._ctx_addrs)
@@ -1218,7 +1218,7 @@ struct StaticScheduler(Movable):
         if self._workers_len > 0:
             _scheduler_free_raw(self._workers_ptr.bitcast[UInt8]())
             self._workers_ptr = UnsafePointer[ThreadHandle, MutExternalOrigin](
-                unsafe_from_address=0
+                unsafe_from_address=Int(0)
             )
             self._workers_len = 0
 

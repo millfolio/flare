@@ -680,7 +680,7 @@ def _ws_worker_entry(arg: _OpaquePtr) -> _OpaquePtr:
             _handle_ws_connection(stream^, peer, ctx_ptr[].handler)
     except:
         pass
-    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=0)
+    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=Int(0))
 
 
 def _ws_serve_multicore(

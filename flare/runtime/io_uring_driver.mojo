@@ -177,7 +177,7 @@ def libc_mmap(
         fd >= -1, "libc_mmap: fd must be >= -1; got ", fd
     )
     var null_addr = UnsafePointer[UInt8, MutExternalOrigin](
-        unsafe_from_address=0
+        unsafe_from_address=Int(0)
     )
     var rc = external_call["mmap", UnsafePointer[UInt8, MutExternalOrigin]](
         null_addr,
@@ -528,7 +528,7 @@ struct IoUringDriver(Movable):
         var pending = Int(self._sq_local_tail) - Int(k_head)
         if pending >= self.sq_entries():
             return UnsafePointer[UInt8, MutExternalOrigin](
-                unsafe_from_address=0
+                unsafe_from_address=Int(0)
             )
         var idx = Int(self._sq_local_tail & self._sq_ring_mask)
         return self._sqes_ptr + idx * IO_URING_SQE_BYTES
