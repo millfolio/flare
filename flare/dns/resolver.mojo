@@ -12,7 +12,7 @@ Memory safety contract:
     return path.
 """
 
-from std.ffi import c_int, c_uint, c_char, get_errno, external_call
+from std.ffi import c_int, c_uint, c_char, get_errno, external_call, CStringSlice
 from std.memory import stack_allocation
 from std.sys.info import CompilationTarget, platform_map
 
@@ -238,7 +238,7 @@ def _ipv4_from_sockaddr(sa_ptr: Int) -> String:
     )
     if ntop[0] == 0:
         return ""
-    return String(StringSlice(unsafe_from_utf8_ptr=ntop))
+    return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=ntop.bitcast[Int8]())))
 
 
 def _ipv6_from_sockaddr(sa_ptr: Int) -> String:
@@ -268,4 +268,4 @@ def _ipv6_from_sockaddr(sa_ptr: Int) -> String:
     )
     if ntop[0] == 0:
         return ""
-    return String(StringSlice(unsafe_from_utf8_ptr=ntop))
+    return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=ntop.bitcast[Int8]())))
