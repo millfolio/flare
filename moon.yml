@@ -1,0 +1,12 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+layer: 'library'
+tags: ['mojo']
+
+tasks:
+  check:
+    command: 'pixi run test-quic-varint'
+    toolchain: 'system'
+    inputs:
+      - 'flare/**/*.mojo'
+      - 'pixi.toml'
+      - 'pixi.lock'
