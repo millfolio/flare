@@ -148,12 +148,10 @@ struct Response(Movable):
         """
         if len(self.body) == 0:
             return ""
-        # Build string from raw bytes.
-        # Mojo String stores UTF-8 internally; slice copy is safe.
-        var out = String(capacity=len(self.body) + 1)
-        for b in self.body:
-            out += chr(Int(b))
-        return out^
+        # Bulk UTF-8 copy in ONE pass. The previous byte-by-byte `out += chr(b)`
+        # was O(n^2) (String += reallocates), turning a 358 KB response into 20s+
+        # at 100% CPU — AND mis-decoded multi-byte UTF-8 (chr per byte = Latin-1).
+        return String(unsafe_from_utf8=Span(self.body))
 
     def json(self) raises -> Value:
         """Parse the body as JSON and return a ``json.Value``.
