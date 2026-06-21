@@ -11,10 +11,22 @@ Key performance characteristics:
 
 from std.memory import memcpy, stack_allocation
 from std.ffi import c_int, c_uint, external_call
+from std.collections import Optional
 
 from json import dumps, Value as JsonValue
 
 from ..runtime._libc_time import libc_nanosleep_ms
+
+# WebSocket upgrade seam. ``WsConnection`` is named at module scope so
+# ``ServerConfig.ws_handler`` can carry the per-connection ws callback.
+# This does NOT create an import cycle: ``flare.ws.server`` imports only
+# ``flare.http.response`` (a leaf) — never ``flare.http.server``.
+from ..ws.server import WsConnection
+
+# The opt-in WebSocket handler signature. Mirrors ``WsServer.serve``'s
+# callback exactly (``def(mut WsConnection) raises thin -> None``) so an
+# existing ``WsServer`` handler plugs into ``HttpServer`` unchanged.
+comptime WsHandlerFn = def (mut WsConnection) raises thin -> None
 
 from .handler import Handler, CancelHandler
 from .intern import intern_method_bytes
@@ -121,6 +133,28 @@ struct ServerConfig(Copyable, Movable):
     Linux-only, HTTP/1.1-only, single-listener-only -- the
     field is silently ignored on macOS / for HTTP/2 / for
     ``HttpServer.bind_many``."""
+    var ws_handler: Optional[WsHandlerFn]
+    """Opt-in WebSocket upgrade handler.
+
+    ``None`` (the default) → the server has no WebSocket endpoint and
+    behaves exactly as before: every request flows through the unary
+    ``Handler.serve(req) -> Response`` path. When set (via
+    ``HttpServer.serve(http_handler, ws_handler)`` or by assigning the
+    field directly), the HTTP/1.1 per-connection state machine
+    (:class:`flare.http._server_reactor_impl.ConnHandle`) detects a
+    qualifying RFC 6455 upgrade request — ``Connection: Upgrade`` +
+    ``Upgrade: websocket`` + a non-empty ``Sec-WebSocket-Key`` — on the
+    SAME listener, performs the ``101 Switching Protocols`` handshake,
+    wraps the connection's socket in a :class:`flare.ws.WsConnection`,
+    and calls this handler (full-duplex, blocking that one connection's
+    handling — the identical model :class:`flare.ws.WsServer` uses).
+    All non-upgrade requests are untouched.
+
+    The callback is a trivially-copyable ``def`` function pointer, so it
+    rides through ``ServerConfig.copy()`` (multi-worker per-worker config
+    clone) at zero cost and is shared across workers without per-worker
+    packaging — same property ``WsServer``'s multi-worker path relies
+    on."""
 
     def __init__(
         out self,
@@ -139,6 +173,7 @@ struct ServerConfig(Copyable, Movable):
         request_timeout_ms: Int = 60_000,
         skip_header_decode_for_short_requests: Bool = False,
         use_bufring: Bool = False,
+        ws_handler: Optional[WsHandlerFn] = None,
     ):
         self.read_buffer_size = read_buffer_size
         self.max_header_size = max_header_size
@@ -157,6 +192,7 @@ struct ServerConfig(Copyable, Movable):
             skip_header_decode_for_short_requests
         )
         self.use_bufring = use_bufring
+        self.ws_handler = ws_handler
 
 
 def _resolve_bufring_handler_env() -> Bool:
@@ -534,6 +570,52 @@ struct HttpServer(Movable):
                     " product (N x M) is a future addition."
                 )
             self._serve_multicore[FnHandler](h^, num_workers, pin_cores)
+
+    def serve(
+        mut self,
+        handler: def(Request) raises thin -> Response,
+        ws_handler: WsHandlerFn,
+        num_workers: Int = 1,
+        pin_cores: Bool = True,
+    ) raises:
+        """Run the reactor loop with BOTH a unary HTTP handler and an
+        opt-in WebSocket upgrade handler on the SAME listener / port.
+
+        This is the additive WebSocket seam: one ``HttpServer`` now
+        answers ordinary HTTP routes via ``handler`` AND upgrades any
+        qualifying RFC 6455 request to WebSocket via ``ws_handler`` —
+        without a second listener or a second port.
+
+        Per accepted connection the HTTP/1.1 state machine parses the
+        request as usual. If it carries ``Connection: Upgrade`` +
+        ``Upgrade: websocket`` + a non-empty ``Sec-WebSocket-Key``, the
+        server performs the ``101 Switching Protocols`` handshake, wraps
+        the socket in a :class:`flare.ws.WsConnection`, and calls
+        ``ws_handler(conn)`` (full-duplex, blocking that one
+        connection — the identical model :class:`flare.ws.WsServer`
+        uses). Every other request goes to ``handler`` unchanged.
+
+        Equivalent to setting ``ServerConfig.ws_handler`` before calling
+        the single-arg ``serve(handler)``; this overload just wires the
+        field for you and forwards to the same dispatch.
+
+        Args:
+            handler: Unary request -> response callback (non-upgrade
+                traffic).
+            ws_handler: Per-WebSocket-connection callback, invoked once
+                per successfully upgraded connection. Same shape as
+                ``WsServer.serve``'s handler.
+            num_workers: Worker count (``<= 0`` coerced to 1). Multi-
+                worker is supported: the ``ws_handler`` function pointer
+                is trivially copyable and rides in the per-worker
+                ``ServerConfig`` copy.
+            pin_cores: On Linux, pin worker N to core ``N % num_cpus``.
+
+        Raises:
+            NetworkError: On fatal listener errors.
+        """
+        self.config.ws_handler = Optional[WsHandlerFn](ws_handler)
+        self.serve(handler, num_workers, pin_cores)
 
     def serve[H: Handler](mut self, var handler: H) raises:
         """Run the single-worker reactor loop with any ``Handler``.
