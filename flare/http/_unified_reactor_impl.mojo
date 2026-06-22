@@ -262,7 +262,7 @@ def _apply_step_h2(
     mut reactor: Reactor,
     mut wheel: TimerWheel,
     mut timers: Dict[Int, UInt64],
-    h2_ptr: UnsafePointer[H2ConnHandle, MutExternalOrigin],
+    h2_ptr: UnsafePointer[H2ConnHandle, MutUntrackedOrigin],
 ) raises:
     """Translate an :class:`H2ConnHandle` step into reactor + timer ops.
 
@@ -836,7 +836,7 @@ def run_unified_reactor_loop[
 
     var events = List[Event]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()
@@ -949,7 +949,7 @@ def run_unified_reactor_loop_multi[
 
     var events = List[Event]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()
@@ -1021,7 +1021,7 @@ def run_unified_reactor_loop_shared[
 
     var events = List[Event]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()

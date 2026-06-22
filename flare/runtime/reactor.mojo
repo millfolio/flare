@@ -527,7 +527,7 @@ struct Reactor(Movable):
                     ts,
                 )
             else:
-                var null_ts = UnsafePointer[UInt8, MutExternalOrigin](
+                var null_ts = UnsafePointer[UInt8, MutUntrackedOrigin](
                     unsafe_from_address=Int(0)
                 )
                 n = _kevent(

@@ -449,7 +449,7 @@ def _check_opcode(op: Int) -> None:
 
 @always_inline
 def _store_u8(
-    buf: UnsafePointer[UInt8, MutExternalOrigin], offset: Int, value: UInt8
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin], offset: Int, value: UInt8
 ) -> None:
     """Write a u8 into ``buf[offset]`` with bounds + non-NULL guard."""
     debug_assert[assert_mode="safe"](
@@ -465,7 +465,7 @@ def _store_u8(
 
 @always_inline
 def _store_u16_le(
-    buf: UnsafePointer[UInt8, MutExternalOrigin], offset: Int, value: UInt16
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin], offset: Int, value: UInt16
 ) -> None:
     """Write a u16 little-endian into ``buf[offset..offset+2]``."""
     debug_assert[assert_mode="safe"](
@@ -483,7 +483,7 @@ def _store_u16_le(
 
 @always_inline
 def _store_u32_le(
-    buf: UnsafePointer[UInt8, MutExternalOrigin], offset: Int, value: UInt32
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin], offset: Int, value: UInt32
 ) -> None:
     """Write a u32 little-endian into ``buf[offset..offset+4]``."""
     debug_assert[assert_mode="safe"](
@@ -503,7 +503,7 @@ def _store_u32_le(
 
 @always_inline
 def _store_u64_le(
-    buf: UnsafePointer[UInt8, MutExternalOrigin], offset: Int, value: UInt64
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin], offset: Int, value: UInt64
 ) -> None:
     """Write a u64 little-endian into ``buf[offset..offset+8]``."""
     debug_assert[assert_mode="safe"](
@@ -591,7 +591,7 @@ struct IoUringSqe(Movable):
     ``liburing``.
     """
 
-    var _buf: UnsafePointer[UInt8, MutExternalOrigin]
+    var _buf: UnsafePointer[UInt8, MutUntrackedOrigin]
     """Owning pointer to the 64-byte SQE buffer."""
 
     def __init__(out self) raises:
@@ -599,7 +599,7 @@ struct IoUringSqe(Movable):
         var raw = alloc[UInt8](IO_URING_SQE_BYTES)
         for i in range(IO_URING_SQE_BYTES):
             (raw + i).init_pointee_copy(UInt8(0))
-        self._buf = UnsafePointer[UInt8, MutExternalOrigin](
+        self._buf = UnsafePointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(raw)
         )
 
@@ -609,7 +609,7 @@ struct IoUringSqe(Movable):
             self._buf.free()
 
     @always_inline
-    def as_bytes(self) -> UnsafePointer[UInt8, MutExternalOrigin]:
+    def as_bytes(self) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
         """Return the raw 64-byte buffer pointer.
 
         The pointer's lifetime is tied to the SQE. Callers may
@@ -695,7 +695,7 @@ struct IoUringSqe(Movable):
 
 
 @always_inline
-def encode_sqe_zero(buf: UnsafePointer[UInt8, MutExternalOrigin]) -> None:
+def encode_sqe_zero(buf: UnsafePointer[UInt8, MutUntrackedOrigin]) -> None:
     """Zero the 64-byte SQE buffer at ``buf`` in preparation for
     a ``prep_*`` helper.
 
@@ -712,7 +712,7 @@ def encode_sqe_zero(buf: UnsafePointer[UInt8, MutExternalOrigin]) -> None:
 
 @always_inline
 def prep_nop(
-    buf: UnsafePointer[UInt8, MutExternalOrigin], user_data: UInt64
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin], user_data: UInt64
 ) -> None:
     """Write an ``IORING_OP_NOP`` SQE at ``buf``.
 
@@ -732,7 +732,7 @@ def prep_nop(
 
 @always_inline
 def prep_accept(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     fd: Int,
     addr: UInt64,
     addrlen_ptr: UInt64,
@@ -771,7 +771,7 @@ def prep_accept(
 
 @always_inline
 def prep_multishot_accept(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     fd: Int,
     addr: UInt64,
     addrlen_ptr: UInt64,
@@ -817,7 +817,7 @@ def prep_multishot_accept(
 
 @always_inline
 def prep_recv(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     fd: Int,
     rx_buf: UInt64,
     rx_len: Int,
@@ -871,7 +871,7 @@ def prep_recv(
 
 @always_inline
 def prep_provide_buffers(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     addr: UInt64,
     nbytes_per_buf: Int,
     nbufs: Int,
@@ -940,7 +940,7 @@ def prep_provide_buffers(
 
 @always_inline
 def prep_recv_buffer_select(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     fd: Int,
     bgid: UInt16,
     recv_flags: UInt32,
@@ -1003,7 +1003,7 @@ def prep_recv_buffer_select(
 
 @always_inline
 def prep_read(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     fd: Int,
     rx_buf: UInt64,
     rx_len: Int,
@@ -1045,7 +1045,7 @@ def prep_read(
 
 @always_inline
 def prep_poll_add(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     fd: Int,
     poll_mask: UInt32,
     user_data: UInt64,
@@ -1102,7 +1102,7 @@ def prep_poll_add(
 
 @always_inline
 def prep_poll_remove(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     target_user_data: UInt64,
     user_data: UInt64,
 ) -> None:
@@ -1135,7 +1135,7 @@ def prep_poll_remove(
 
 @always_inline
 def prep_send(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     fd: Int,
     tx_buf: UInt64,
     tx_len: Int,
@@ -1170,7 +1170,7 @@ def prep_send(
 
 @always_inline
 def prep_writev(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     fd: Int,
     iovec_addr: UInt64,
     iovec_count: Int,
@@ -1211,7 +1211,7 @@ def prep_writev(
 
 @always_inline
 def prep_close(
-    buf: UnsafePointer[UInt8, MutExternalOrigin], fd: Int, user_data: UInt64
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin], fd: Int, user_data: UInt64
 ) -> None:
     """Write an ``IORING_OP_CLOSE`` SQE at ``buf``.
 
@@ -1231,7 +1231,7 @@ def prep_close(
 
 @always_inline
 def prep_async_cancel(
-    buf: UnsafePointer[UInt8, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutUntrackedOrigin],
     target_user_data: UInt64,
     user_data: UInt64,
 ) -> None:

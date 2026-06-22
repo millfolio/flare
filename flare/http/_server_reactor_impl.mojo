@@ -1823,9 +1823,9 @@ def _conn_free_addr(addr: Int):
 
 def _conn_ptr_from_int(
     addr: Int,
-) -> UnsafePointer[ConnHandle, MutExternalOrigin]:
+) -> UnsafePointer[ConnHandle, MutUntrackedOrigin]:
     """Reverse of ``_conn_alloc_addr``: reconstruct a typed pointer."""
-    return UnsafePointer[UInt8, MutExternalOrigin](
+    return UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=addr
     ).bitcast[ConnHandle]()
 
@@ -1836,7 +1836,7 @@ def _apply_step(
     mut reactor: Reactor,
     mut wheel: TimerWheel,
     mut timers: Dict[Int, UInt64],
-    conn_ptr: UnsafePointer[ConnHandle, MutExternalOrigin],
+    conn_ptr: UnsafePointer[ConnHandle, MutUntrackedOrigin],
 ) raises:
     """Translate a ``StepResult`` into reactor + timer-wheel operations.
 
@@ -2013,13 +2013,13 @@ def run_reactor_loop[
 
     var events = List[Event]()
     # Take the address of the caller's ``stopping`` Bool once, then
-    # re-materialise a fresh ``UnsafePointer`` with ``MutExternalOrigin``
+    # re-materialise a fresh ``UnsafePointer`` with ``MutUntrackedOrigin``
     # inside the loop condition on every iteration. This defeats any
     # LICM / load-forwarding the optimiser might otherwise do: from
     # Mojo's point of view each iteration sees a brand-new pointer of
     # externally-mutated origin, which it must re-load.
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()
@@ -2157,7 +2157,7 @@ def run_reactor_loop_shared[
 
     var events = List[Event]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()
@@ -2263,7 +2263,7 @@ def run_reactor_loop_static(
 
     var events = List[Event]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()
@@ -2386,7 +2386,7 @@ def run_reactor_loop_static_shared(
 
     var events = List[Event]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()
@@ -2502,7 +2502,7 @@ def run_reactor_loop_cancel[
 
     var events = List[Event]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()
@@ -2620,7 +2620,7 @@ def run_reactor_loop_view[
 
     var events = List[Event]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         events.clear()
@@ -2849,7 +2849,7 @@ def run_uring_reactor_loop_static(
 
     var completions = List[UringCompletion]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         completions.clear()
@@ -3188,7 +3188,7 @@ def _free_recv_buffer_pool(addr: Int):
     """Release the pool previously returned by ``_alloc_recv_buffer_pool``."""
     if addr == 0:
         return
-    var p = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=addr)
+    var p = UnsafePointer[UInt8, MutUntrackedOrigin](unsafe_from_address=addr)
     p.free()
 
 
@@ -3242,7 +3242,7 @@ def _drive_handler_with_submit_send[
     bytes: Span[UInt8, _],
     config: ServerConfig,
     ref handler: H,
-    ch_ptr: UnsafePointer[ConnHandle, MutExternalOrigin],
+    ch_ptr: UnsafePointer[ConnHandle, MutUntrackedOrigin],
     mut ureactor: UringReactor,
 ) raises -> Bool:
     """Drive one request via parse → handler → submit_send.
@@ -3317,7 +3317,7 @@ def _on_send_cqe_complete[
     conn_id: UInt64,
     config: ServerConfig,
     ref handler: H,
-    ch_ptr: UnsafePointer[ConnHandle, MutExternalOrigin],
+    ch_ptr: UnsafePointer[ConnHandle, MutUntrackedOrigin],
     mut ureactor: UringReactor,
 ) raises -> Bool:
     """Handle a ``URING_OP_SEND`` CQE: clear the send-in-flight
@@ -3361,7 +3361,7 @@ def _drive_handler_after_buf_recv[
     bytes: Span[UInt8, _],
     config: ServerConfig,
     ref handler: H,
-    ch_ptr: UnsafePointer[ConnHandle, MutExternalOrigin],
+    ch_ptr: UnsafePointer[ConnHandle, MutUntrackedOrigin],
 ) raises -> Bool:
     """Sync-send variant kept as a fallback / reference -- see
     ``_drive_handler_with_submit_send`` for the production io_uring
@@ -3498,7 +3498,7 @@ def run_uring_bufring_reactor_loop[
 
     var completions = List[UringCompletion]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         completions.clear()
@@ -3579,7 +3579,7 @@ def run_uring_bufring_reactor_loop[
             var fd = _br_unpack_fd(conn_id)
             var bid = Int(comp.flags >> UInt32(16))
             var n = Int(comp.res)
-            var pool_ptr = UnsafePointer[UInt8, MutExternalOrigin](
+            var pool_ptr = UnsafePointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=pool_addr
             )
             var buf = pool_ptr + (bid * _URING_BR_BUF_SIZE)
@@ -3729,7 +3729,7 @@ def run_uring_bufring_reactor_loop_shared[
 
     var completions = List[UringCompletion]()
     var stopping_addr = Int(UnsafePointer[Bool, _](to=stopping))
-    while not UnsafePointer[Bool, MutExternalOrigin](
+    while not UnsafePointer[Bool, MutUntrackedOrigin](
         unsafe_from_address=stopping_addr
     )[]:
         completions.clear()
@@ -3802,7 +3802,7 @@ def run_uring_bufring_reactor_loop_shared[
             var fd = _br_unpack_fd(conn_id)
             var bid = Int(comp.flags >> UInt32(16))
             var n = Int(comp.res)
-            var pool_ptr = UnsafePointer[UInt8, MutExternalOrigin](
+            var pool_ptr = UnsafePointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=pool_addr
             )
             var buf = pool_ptr + (bid * _URING_BR_BUF_SIZE)

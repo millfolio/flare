@@ -153,7 +153,7 @@ def _munmap(addr: Int, size: Int) -> None:
     """Release memory previously returned by ``_mmap_anon_rw``."""
     if addr == 0:
         return
-    var p = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=addr)
+    var p = UnsafePointer[UInt8, MutUntrackedOrigin](unsafe_from_address=addr)
     _ = libc_munmap(p, size)
 
 
@@ -192,7 +192,7 @@ def _pbuf_ring_add(
     """
     var mask = ring_entries - 1
     var idx = (Int(cur_tail) + buf_offset) & mask
-    var entry = UnsafePointer[UInt8, MutExternalOrigin](
+    var entry = UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=ring_addr + idx * 16
     )
     # addr (offset 0, u64 LE)
@@ -218,7 +218,7 @@ def _pbuf_ring_get_tail(ring_addr: Int) -> UInt16:
     of slot[0]) with relaxed ordering. App-side load only -- the
     kernel reads tail on every recv-buffer-select with acquire
     ordering, which is the publishing barrier."""
-    var tail_ptr = UnsafePointer[UInt8, MutExternalOrigin](
+    var tail_ptr = UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=ring_addr + 14
     )
     var lo = Int(tail_ptr.load())
@@ -231,7 +231,7 @@ def _pbuf_ring_set_tail(ring_addr: Int, new_tail: UInt16) -> None:
     """Release-store the ring's tail field. Pairs with the
     kernel's acquire-load on every recv-buffer-select.
     """
-    var tail_ptr = UnsafePointer[UInt8, MutExternalOrigin](
+    var tail_ptr = UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=ring_addr + 14
     )
     # Use Atomic[u16] release store for cross-platform memory
@@ -404,10 +404,10 @@ struct UringReactor(Movable):
     var _wake_fd: c_int
     # Owning pointer to the 8-byte eventfd recv buffer; pinned for
     # the reactor's lifetime so the multishot recv arming SQE
-    # stays valid. Stored under ``MutExternalOrigin`` to match
+    # stays valid. Stored under ``MutUntrackedOrigin`` to match
     # the ``prep_recv`` buf-pointer convention used everywhere
     # in :mod:`flare.runtime.io_uring_sqe`.
-    var _wake_buf: UnsafePointer[UInt8, MutExternalOrigin]
+    var _wake_buf: UnsafePointer[UInt8, MutUntrackedOrigin]
     var _io: FlareRawIO
     var _wake_armed: Bool
     var _cross_thread_wakeup: Bool
@@ -504,7 +504,7 @@ struct UringReactor(Movable):
             var raw = alloc[UInt8](8)
             for i in range(8):
                 (raw + i).init_pointee_copy(UInt8(0))
-            self._wake_buf = UnsafePointer[UInt8, MutExternalOrigin](
+            self._wake_buf = UnsafePointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=Int(raw)
             )
         else:
@@ -514,7 +514,7 @@ struct UringReactor(Movable):
             # free() when these are sentinel) so the no-wakeup
             # mode is fully no-op on shutdown too.
             self._wake_fd = INVALID_FD
-            self._wake_buf = UnsafePointer[UInt8, MutExternalOrigin](
+            self._wake_buf = UnsafePointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=Int(0)
             )
         self._wake_armed = False
@@ -575,7 +575,7 @@ struct UringReactor(Movable):
     def arm_recv_multishot(
         mut self,
         fd: Int,
-        buf: UnsafePointer[UInt8, MutExternalOrigin],
+        buf: UnsafePointer[UInt8, MutUntrackedOrigin],
         buf_len: Int,
         conn_id: UInt64,
     ) raises -> None:

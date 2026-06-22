@@ -707,7 +707,7 @@ def _ws_worker_entry(arg: _OpaquePtr) -> _OpaquePtr:
         ctx_addr != 0,
         "_ws_worker_entry: ctx pointer must be non-NULL",
     )
-    var raw = UnsafePointer[UInt8, MutExternalOrigin](
+    var raw = UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=ctx_addr
     )
     var ctx_ptr = raw.bitcast[_WsWorkerCtx]()
@@ -718,7 +718,7 @@ def _ws_worker_entry(arg: _OpaquePtr) -> _OpaquePtr:
             _handle_ws_connection(stream^, peer, ctx_ptr[].handler)
     except:
         pass
-    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=Int(0))
+    return UnsafePointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(0))
 
 
 def _ws_serve_multicore(
@@ -778,7 +778,7 @@ def _ws_serve_multicore(
         var addr_int = Int(arg)
         ctx_addrs.append(addr_int)
         var th = ThreadHandle.spawn[_ws_worker_entry](
-            UnsafePointer[UInt8, MutExternalOrigin](
+            UnsafePointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=addr_int
             )
         )
@@ -798,7 +798,7 @@ def _ws_serve_multicore(
             "_ws_serve_multicore: ctx_addrs[i] is null on free; i=",
             i,
         )
-        var raw = UnsafePointer[UInt8, MutExternalOrigin](
+        var raw = UnsafePointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=ctx_addrs[i]
         )
         raw.bitcast[_WsWorkerCtx]().destroy_pointee()
