@@ -28,7 +28,7 @@ scripts = ["flare/tls/ffi/build.sh", "flare/http/ffi/build.sh"]
 # as a library picks up. Contributor-only tooling (docs generator, pre-commit
 # hooks) lives under [feature.dev] and is opted into via `pixi install -e dev`.
 [dependencies]
-mojo             = "==1.0.0b3.dev2026061206"
+mojo             = "==1.0.0b3.dev2026062206"
 openssl          = ">=3.6.1,<4"    # TLS: libssl + libcrypto (SHA-1 for WS handshake)
 ca-certificates  = ">=2025.1.31"   # TLS default CA bundle → $CONDA_PREFIX/ssl/cacert.pem
 zlib             = ">=1.3.1,<2"    # HTTP: Content-Encoding gzip/deflate decompression
@@ -54,7 +54,6 @@ gxx = ">=13"
 # feature.dev automatically).
 [feature.dev.dependencies]
 pre-commit = ">=4.2.0,<5"
-mojodoc    = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
 # Linux-only: native debug + race-detection tooling for the io_uring
 # root-causing work and the v0.8 allocation-profile pass. gdb --
@@ -219,13 +218,6 @@ fuzz-cache-control-parser = "mojo -I . fuzz/fuzz_cache_control_parser.mojo"  # v
 fuzz-all           = { depends-on = ["fuzz-ws", "fuzz-pmd-context", "fuzz-url", "fuzz-headers", "fuzz-http-response", "fuzz-http-server", "fuzz-ws-server", "prop-ws", "prop-headers", "prop-auth", "fuzz-encoding", "fuzz-cookie", "fuzz-reactor-churn", "prop-timer-wheel", "fuzz-server-reactor-chunks", "fuzz-router-paths", "fuzz-scheduler-shutdown", "fuzz-extractors", "fuzz-routes-comptime", "fuzz-header-scan", "fuzz-form", "fuzz-multipart", "fuzz-session-decode", "fuzz-fs-range", "fuzz-h2-frame", "fuzz-hpack-decoder", "fuzz-huffman-simd", "fuzz-ws-deflate", "fuzz-extended-connect", "fuzz-h2-preface-peek", "fuzz-h2-continuation", "fuzz-h2-rapid-reset", "fuzz-proxy-protocol", "fuzz-io-uring-sqe", "fuzz-uring-reactor", "fuzz-grpc-lpm-decoder", "fuzz-quic-varint", "fuzz-quic-long-header", "fuzz-h3-frame", "fuzz-cache-control-parser"] }
 
 [feature.dev.tasks]
-# ── Docs (powered by mojodoc; dev-only because mojodoc is in feature.dev) ────
-# docs:       build + serve at http://localhost:3000/flare/ (blocks terminal)
-# docs-build: build static HTML → target/doc/ (for CI / GitHub Pages)
-# Run with: pixi run -e dev <task>
-docs       = "mojodoc ./flare --open"
-docs-build = "mojodoc ./flare --out-dir target/doc --base-url /flare/"
-
 # ── Format hook (dev-only because it wires pre-commit into .git/hooks) ──────
 # `format` shells out to `mojo format`, which is available in the lean
 # default env too — but we intentionally gate it on dev so every
@@ -253,7 +245,7 @@ perf-server-alloc  = "bash benchmark/scripts/perf_profile_server.sh"
 [environments]
 # Lean default env — only flare's runtime deps. Ships tests, examples,
 # microbenchmarks, and format-check out of the box. Contributors who
-# need mojodoc / pre-commit should use `-e dev`.
+# need pre-commit should use `-e dev`.
 default = { solve-group = "default" }
 dev     = { features = ["dev"], solve-group = "default" }
 fuzz    = { features = ["dev", "fuzz"], solve-group = "default" }
