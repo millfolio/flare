@@ -106,7 +106,11 @@ def _c_err(read lib: OwnedDLHandle) -> String:
         def() thin abi("C") -> UnsafePointer[UInt8, MutUntrackedOrigin]
     ]("flare_ssl_last_error")
     var p = fn_err()
-    return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=p.bitcast[Int8]())))
+    return String(
+        StringSlice(
+            unsafe_from_utf8=CStringSlice(unsafe_from_ptr=p.bitcast[Int8]())
+        )
+    )
 
 
 def _do_ssl_ctx_new(read lib: OwnedDLHandle) -> Int:
@@ -226,7 +230,11 @@ def _do_ssl_get_version(read lib: OwnedDLHandle, ssl: Int) -> String:
         def(Int) thin abi("C") -> UnsafePointer[UInt8, MutUntrackedOrigin]
     ]("flare_ssl_get_version")
     var p = f(ssl)
-    return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=p.bitcast[Int8]())))
+    return String(
+        StringSlice(
+            unsafe_from_utf8=CStringSlice(unsafe_from_ptr=p.bitcast[Int8]())
+        )
+    )
 
 
 def _do_ssl_get_cipher(read lib: OwnedDLHandle, ssl: Int) -> String:
@@ -234,7 +242,11 @@ def _do_ssl_get_cipher(read lib: OwnedDLHandle, ssl: Int) -> String:
         def(Int) thin abi("C") -> UnsafePointer[UInt8, MutUntrackedOrigin]
     ]("flare_ssl_get_cipher")
     var p = f(ssl)
-    return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=p.bitcast[Int8]())))
+    return String(
+        StringSlice(
+            unsafe_from_utf8=CStringSlice(unsafe_from_ptr=p.bitcast[Int8]())
+        )
+    )
 
 
 def _do_ssl_get_peer_cert_subject(
@@ -776,7 +788,13 @@ struct TlsStream(Movable, Readable):
         )
         if rc != 0:
             raise NetworkError("peer_cert_subject: " + _c_err(lib))
-        return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=buf.bitcast[Int8]())))
+        return String(
+            StringSlice(
+                unsafe_from_utf8=CStringSlice(
+                    unsafe_from_ptr=buf.bitcast[Int8]()
+                )
+            )
+        )
 
     # ── ALPN introspection ───────────────────────────────────────────────────
 
@@ -804,7 +822,13 @@ struct TlsStream(Movable, Readable):
             raise NetworkError("alpn_selected: " + _c_err(lib))
         if rc == 0:
             return String("")
-        return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=buf.bitcast[Int8]())))
+        return String(
+            StringSlice(
+                unsafe_from_utf8=CStringSlice(
+                    unsafe_from_ptr=buf.bitcast[Int8]()
+                )
+            )
+        )
 
     # ── Session resumption ─────────────────────────────────────────────────
 

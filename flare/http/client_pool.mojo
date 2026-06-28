@@ -166,7 +166,9 @@ struct ClientPool(Copyable, Movable):
         """Return ``True`` when ``_addr != 0`` (pooling is on)."""
         return self._addr != 0
 
-    def _state(read self) -> UnsafePointer[_ClientPoolState, MutUntrackedOrigin]:
+    def _state(
+        read self,
+    ) -> UnsafePointer[_ClientPoolState, MutUntrackedOrigin]:
         """Re-materialise a typed pointer from :attr:`_addr`.
 
         Mirrors the :class:`flare.http.cancel.Cancel` pattern --

@@ -628,9 +628,9 @@ struct Scheduler[H: Handler & Copyable](Movable):
                         pass
                     (s._workers_ptr + j).destroy_pointee()
                 _scheduler_free_raw(s._workers_ptr.bitcast[UInt8]())
-                s._workers_ptr = UnsafePointer[ThreadHandle, MutUntrackedOrigin](
-                    unsafe_from_address=Int(0)
-                )
+                s._workers_ptr = UnsafePointer[
+                    ThreadHandle, MutUntrackedOrigin
+                ](unsafe_from_address=Int(0))
                 s._workers_len = 0
                 # Destroy + free EVERY ctx (the ones that workers claimed
                 # + this one that never got claimed).
@@ -1173,9 +1173,9 @@ struct StaticScheduler(Movable):
                         pass
                     (s._workers_ptr + j).destroy_pointee()
                 _scheduler_free_raw(s._workers_ptr.bitcast[UInt8]())
-                s._workers_ptr = UnsafePointer[ThreadHandle, MutUntrackedOrigin](
-                    unsafe_from_address=Int(0)
-                )
+                s._workers_ptr = UnsafePointer[
+                    ThreadHandle, MutUntrackedOrigin
+                ](unsafe_from_address=Int(0))
                 s._workers_len = 0
                 _static_scheduler_free_ctxs(s._ctx_addrs)
                 s._ctx_addrs.clear()

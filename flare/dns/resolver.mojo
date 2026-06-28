@@ -12,7 +12,14 @@ Memory safety contract:
     return path.
 """
 
-from std.ffi import c_int, c_uint, c_char, get_errno, external_call, CStringSlice
+from std.ffi import (
+    c_int,
+    c_uint,
+    c_char,
+    get_errno,
+    external_call,
+    CStringSlice,
+)
 from std.memory import stack_allocation
 from std.sys.info import CompilationTarget, platform_map
 
@@ -223,7 +230,9 @@ def _ipv4_from_sockaddr(sa_ptr: Int) -> String:
         Dotted-decimal string (e.g. ``"127.0.0.1"``), or empty string on
         ``inet_ntop`` failure.
     """
-    var sa = UnsafePointer[UInt8, MutUntrackedOrigin](unsafe_from_address=sa_ptr)
+    var sa = UnsafePointer[UInt8, MutUntrackedOrigin](
+        unsafe_from_address=sa_ptr
+    )
     var ntop = stack_allocation[64, UInt8]()
     for i in range(64):
         (ntop + i).init_pointee_copy(0)
@@ -238,7 +247,11 @@ def _ipv4_from_sockaddr(sa_ptr: Int) -> String:
     )
     if ntop[0] == 0:
         return ""
-    return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=ntop.bitcast[Int8]())))
+    return String(
+        StringSlice(
+            unsafe_from_utf8=CStringSlice(unsafe_from_ptr=ntop.bitcast[Int8]())
+        )
+    )
 
 
 def _ipv6_from_sockaddr(sa_ptr: Int) -> String:
@@ -253,7 +266,9 @@ def _ipv6_from_sockaddr(sa_ptr: Int) -> String:
     comptime _pm = platform_map[T=Int, ...]
     comptime AF_INET6_VAL: c_int = c_int(_pm["AF_INET6", linux=10, macos=30]())
 
-    var sa = UnsafePointer[UInt8, MutUntrackedOrigin](unsafe_from_address=sa_ptr)
+    var sa = UnsafePointer[UInt8, MutUntrackedOrigin](
+        unsafe_from_address=sa_ptr
+    )
     var ntop = stack_allocation[64, UInt8]()
     for i in range(64):
         (ntop + i).init_pointee_copy(0)
@@ -268,4 +283,8 @@ def _ipv6_from_sockaddr(sa_ptr: Int) -> String:
     )
     if ntop[0] == 0:
         return ""
-    return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=ntop.bitcast[Int8]())))
+    return String(
+        StringSlice(
+            unsafe_from_utf8=CStringSlice(unsafe_from_ptr=ntop.bitcast[Int8]())
+        )
+    )

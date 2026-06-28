@@ -132,9 +132,7 @@ def test_http_and_ws_on_one_port() raises:
     var ws_echo = String("")
     var ws_raised = False
     try:
-        var ws = WsClient.connect(
-            "ws://127.0.0.1:" + String(Int(port)) + "/ws"
-        )
+        var ws = WsClient.connect("ws://127.0.0.1:" + String(Int(port)) + "/ws")
         ws.send_text("from-client")
         var reply = ws.recv()
         if reply.opcode == WsOpcode.TEXT:

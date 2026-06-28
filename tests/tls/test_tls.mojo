@@ -58,7 +58,11 @@ def _tls_err(lib: OwnedDLHandle) -> String:
         def() thin abi("C") -> UnsafePointer[UInt8, MutExternalOrigin]
     ]("flare_ssl_last_error")
     var p = fn_e()
-    return String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=p.bitcast[Int8]())))
+    return String(
+        StringSlice(
+            unsafe_from_utf8=CStringSlice(unsafe_from_ptr=p.bitcast[Int8]())
+        )
+    )
 
 
 # ── Test server wrapper ───────────────────────────────────────────────────────

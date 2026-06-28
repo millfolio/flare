@@ -110,7 +110,16 @@ struct IpAddr(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
             )
             if ntop[0] == 0:
                 raise AddressParseError(s)
-            return IpAddr(String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=ntop.bitcast[Int8]()))), False)
+            return IpAddr(
+                String(
+                    StringSlice(
+                        unsafe_from_utf8=CStringSlice(
+                            unsafe_from_ptr=ntop.bitcast[Int8]()
+                        )
+                    )
+                ),
+                False,
+            )
 
         # Try IPv6
         var ip6 = stack_allocation[16, UInt8]()
@@ -130,7 +139,16 @@ struct IpAddr(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
             )
             if ntop[0] == 0:
                 raise AddressParseError(s)
-            return IpAddr(String(StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=ntop.bitcast[Int8]()))), True)
+            return IpAddr(
+                String(
+                    StringSlice(
+                        unsafe_from_utf8=CStringSlice(
+                            unsafe_from_ptr=ntop.bitcast[Int8]()
+                        )
+                    )
+                ),
+                True,
+            )
 
         raise AddressParseError(s)
 

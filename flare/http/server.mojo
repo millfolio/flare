@@ -26,7 +26,7 @@ from ..ws.server import WsConnection
 # The opt-in WebSocket handler signature. Mirrors ``WsServer.serve``'s
 # callback exactly (``def(mut WsConnection) raises thin -> None``) so an
 # existing ``WsServer`` handler plugs into ``HttpServer`` unchanged.
-comptime WsHandlerFn = def (mut WsConnection) raises thin -> None
+comptime WsHandlerFn = def(mut WsConnection) raises thin -> None
 
 from .handler import Handler, CancelHandler
 from .intern import intern_method_bytes
