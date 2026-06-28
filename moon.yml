@@ -3,10 +3,14 @@ layer: 'library'
 tags: ['mojo']
 
 tasks:
+  # The full default-env suite (the `tests` aggregate runs every tests/ + examples/
+  # file). Fuzz/bench (-e fuzz / -e bench) stay opt-in, not part of the gate.
   check:
-    command: 'pixi run test-quic-varint'
+    command: 'pixi run tests'
     toolchain: 'system'
     inputs:
       - 'flare/**/*.mojo'
+      - 'tests/**/*.mojo'
+      - 'examples/**/*.mojo'
       - 'pixi.toml'
       - 'pixi.lock'

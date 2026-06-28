@@ -951,7 +951,7 @@ struct Extracted[H: Copyable & Defaultable & Handler & Movable](
 
     def serve(self, req: Request) raises -> Response:
         var h = Self.H()
-        comptime n = reflect[Self.H]().field_count()
+        comptime n = reflect[Self.H].field_count()
         var expose = req.expose_errors
         comptime for idx in range(n):
             try:

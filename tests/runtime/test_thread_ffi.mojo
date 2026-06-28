@@ -30,7 +30,13 @@ from flare.runtime._thread import (
 
 @always_inline
 def _null_out() -> UnsafePointer[UInt8, MutExternalOrigin]:
-    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=0)
+    # Thread routines return ``void*`` and these tests never read the
+    # value back, so this is just an unused sentinel. UnsafePointer is
+    # now non-nullable (a comptime-0 address is rejected), so point at a
+    # real stack byte instead — same shape as ``_ptr_to_int`` below.
+    var sentinel: UInt8 = 0
+    var addr = Int(UnsafePointer[UInt8, _](to=sentinel))
+    return UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=addr)
 
 
 def _write_42(

@@ -534,7 +534,7 @@ def test_response_includes_date_header_from_cache() raises:
     # IMF-fixdate is exactly 29 bytes; the line ends ``GMT\r\n``.
     var gmt_pos = wire.find(" GMT\r\n", date_pos)
     assert_true(gmt_pos >= 0)
-    assert_equal(gmt_pos - (date_pos + len("\r\nDate: ")), 25)
+    assert_equal(gmt_pos - (date_pos + String("\r\nDate: ").byte_length()), 25)
     client.close()
 
 

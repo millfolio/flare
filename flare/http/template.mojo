@@ -275,6 +275,13 @@ struct TemplateNode(Copyable, Movable):
     var loop_var: String
     var children: List[TemplateNode]
 
+    def __del__(deinit self):
+        # Explicit trivial destructor: ``children: List[Self]`` makes
+        # TemplateNode self-referential, which the deletability-inference
+        # cycle can no longer resolve implicitly. Fields are still
+        # auto-destroyed; this just breaks the inference cycle.
+        pass
+
 
 # ── Context ────────────────────────────────────────────────────────────────
 
