@@ -60,7 +60,7 @@ from .response import Response
 # ── Trait ────────────────────────────────────────────────────────────────────
 
 
-trait Handler(ImplicitlyDestructible, Movable):
+trait Handler(ImplicitlyDeletable, Movable):
     """The request-to-response contract every flare endpoint satisfies.
 
     Implementors turn a ``Request`` into a ``Response``. Handler structs
@@ -173,7 +173,7 @@ trait HandlerExtractor(Copyable, Defaultable, Handler, Movable):
     pass
 
 
-trait HandlerInfallible(ImplicitlyDestructible, Movable):
+trait HandlerInfallible(ImplicitlyDeletable, Movable):
     """A :trait:`Handler` whose ``serve`` is provably infallible.
 
     The standard :trait:`Handler` requires ``serve(self, req: Request)
@@ -305,7 +305,7 @@ struct FnHandlerCT[F: def(Request) raises thin -> Response](Copyable, Handler):
 # ── CancelHandler trait + WithCancel adapter ────────────────
 
 
-trait CancelHandler(ImplicitlyDestructible, Movable):
+trait CancelHandler(ImplicitlyDeletable, Movable):
     """A request-to-response contract that takes a ``Cancel`` token.
 
     The reactor calls ``serve(req, cancel)`` once per parsed request.
@@ -364,7 +364,7 @@ trait CancelHandler(ImplicitlyDestructible, Movable):
 # ── ViewHandler trait + WithViewCancel adapter ────
 
 
-trait ViewHandler(ImplicitlyDestructible, Movable):
+trait ViewHandler(ImplicitlyDeletable, Movable):
     """Borrowed-input request-to-response contract.
 
     Like ``CancelHandler`` but takes a ``RequestView[origin]`` whose
@@ -436,9 +436,7 @@ trait ViewHandler(ImplicitlyDestructible, Movable):
 
 
 @fieldwise_init
-struct WithViewCancel[H: Handler & Copyable & Movable](
-    Copyable, Movable, ViewHandler
-):
+struct WithViewCancel[H: Handler & Copyable](Copyable, Movable, ViewHandler):
     """Adapter that lets a plain ``Handler`` plug into the
     view-aware reactor path.
 
@@ -500,9 +498,7 @@ struct WithViewCancel[H: Handler & Copyable & Movable](
 
 
 @fieldwise_init
-struct WithCancel[H: Handler & Copyable & Movable](
-    CancelHandler, Copyable, Movable
-):
+struct WithCancel[H: Handler & Copyable](CancelHandler, Copyable, Movable):
     """Adapter that lets a plain ``Handler`` plug into the
     cancel-aware reactor path.
 
@@ -566,7 +562,7 @@ struct WithCancel[H: Handler & Copyable & Movable](
 
 
 @fieldwise_init
-struct WithRaises[Inner: HandlerInfallible & Copyable & Movable](
+struct WithRaises[Inner: HandlerInfallible & Copyable](
     Copyable, Handler, Movable
 ):
     """Adapt a :trait:`HandlerInfallible` so it fits the regular

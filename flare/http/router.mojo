@@ -189,7 +189,7 @@ struct _Route(Copyable, Movable):
 
 
 def _struct_serve_thunk[
-    H: Handler & Copyable & Movable
+    H: Handler & Copyable
 ](addr: Int, req: Request) raises -> Response:
     """Thunk that materialises the boxed ``H`` from its address
     and forwards to ``H.serve``.
@@ -207,7 +207,7 @@ def _struct_serve_thunk[
     return ptr[].serve(req)
 
 
-def _struct_destroy_thunk[H: Handler & Copyable & Movable](addr: Int) -> None:
+def _struct_destroy_thunk[H: Handler & Copyable](addr: Int) -> None:
     """Thunk that destroys + frees the heap-allocated ``H`` at
     ``addr``. Called once per route from ``Router.__del__`` via
     the parallel ``_struct_destroy_thunks`` list.
@@ -408,7 +408,7 @@ struct Router(Copyable, Handler, Movable):
     # ── Registration per method (Handler-struct overloads, ) ──
 
     def get[
-        H: Handler & Copyable & Movable
+        H: Handler & Copyable
     ](mut self, path: String, var handler: H) raises:
         """Register ``handler`` (a Handler struct) for ``GET path``.
 
@@ -432,42 +432,42 @@ struct Router(Copyable, Handler, Movable):
         self._add_struct[H](Method.GET, path, handler^)
 
     def post[
-        H: Handler & Copyable & Movable
+        H: Handler & Copyable
     ](mut self, path: String, var handler: H) raises:
         """Register ``handler`` (a Handler struct) for ``POST path``.
         See ``get[H]`` for the type-erasure shape."""
         self._add_struct[H](Method.POST, path, handler^)
 
     def put[
-        H: Handler & Copyable & Movable
+        H: Handler & Copyable
     ](mut self, path: String, var handler: H) raises:
         """Register ``handler`` (a Handler struct) for ``PUT path``.
         See ``get[H]`` for the type-erasure shape."""
         self._add_struct[H](Method.PUT, path, handler^)
 
     def patch[
-        H: Handler & Copyable & Movable
+        H: Handler & Copyable
     ](mut self, path: String, var handler: H) raises:
         """Register ``handler`` (a Handler struct) for ``PATCH path``.
         See ``get[H]`` for the type-erasure shape."""
         self._add_struct[H](Method.PATCH, path, handler^)
 
     def delete[
-        H: Handler & Copyable & Movable
+        H: Handler & Copyable
     ](mut self, path: String, var handler: H) raises:
         """Register ``handler`` (a Handler struct) for ``DELETE path``.
         See ``get[H]`` for the type-erasure shape."""
         self._add_struct[H](Method.DELETE, path, handler^)
 
     def head[
-        H: Handler & Copyable & Movable
+        H: Handler & Copyable
     ](mut self, path: String, var handler: H) raises:
         """Register ``handler`` (a Handler struct) for ``HEAD path``.
         See ``get[H]`` for the type-erasure shape."""
         self._add_struct[H](Method.HEAD, path, handler^)
 
     def _add_struct[
-        H: Handler & Copyable & Movable
+        H: Handler & Copyable
     ](mut self, method: String, path: String, var handler: H) raises:
         """Heap-allocate ``handler`` via ``Pool[H]`` (which gates
         on ``size_of[H]() > 0`` internally for ZST handlers like

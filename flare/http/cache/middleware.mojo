@@ -178,7 +178,7 @@ def _request_path(req: Request) -> String:
 
 
 def _alloc_store_or_zero[
-    S: CacheStore & ImplicitlyDestructible & Movable & Defaultable,
+    S: CacheStore & ImplicitlyDeletable,
 ]() -> Int:
     """Heap-allocate a fresh ``S`` and return its address, or 0
     on allocator failure. Defaultable middleware ``__init__``
@@ -195,7 +195,7 @@ def _alloc_store_or_zero[
 
 
 def _alloc_store_or_zero_move[
-    S: CacheStore & ImplicitlyDestructible & Movable,
+    S: CacheStore & ImplicitlyDeletable,
 ](var store: S) -> Int:
     """Same as :func:`_alloc_store_or_zero` but moves an
     already-built ``S`` value into the heap cell."""
@@ -207,7 +207,7 @@ def _alloc_store_or_zero_move[
 
 struct Cache[
     Inner: Handler & Copyable & Defaultable,
-    S: CacheStore & ImplicitlyDestructible & Movable,
+    S: CacheStore & ImplicitlyDeletable,
 ](Copyable, Defaultable, Handler, Movable):
     """RFC 9111 HTTP cache middleware.
 

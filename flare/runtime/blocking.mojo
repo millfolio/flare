@@ -123,7 +123,7 @@ comptime _ERR_BUF_CAP: Int = 256
 
 
 @fieldwise_init
-struct _Task[T: ImplicitlyDestructible & Movable](Movable):
+struct _Task[T: ImplicitlyDeletable & Movable](Movable):
     """Heap-allocated task delivered to the worker pthread.
 
     Address fields are stored as ``Int`` rather than typed
@@ -162,7 +162,7 @@ struct _Task[T: ImplicitlyDestructible & Movable](Movable):
 
 
 def _block_thunk[
-    T: ImplicitlyDestructible & Movable
+    T: ImplicitlyDeletable & Movable
 ](arg: UnsafePointer[UInt8, MutUntrackedOrigin]) -> UnsafePointer[
     UInt8, MutUntrackedOrigin
 ]:
@@ -244,7 +244,7 @@ def _raise_cancel(prefix: String, reason: Int) raises:
 
 
 def block_in_pool[
-    T: ImplicitlyDestructible & Movable
+    T: ImplicitlyDeletable & Movable
 ](work: def() raises thin -> T, cancel: Cancel) raises -> T:
     """Run ``work()`` on a fresh kernel thread; wait for its
     result on the calling thread.

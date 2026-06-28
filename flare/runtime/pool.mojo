@@ -49,7 +49,7 @@ from std.memory import UnsafePointer, alloc
 from std.sys.info import size_of
 
 
-struct Pool[T: ImplicitlyDestructible & Movable]:
+struct Pool[T: ImplicitlyDeletable & Movable]:
     """Typed heap allocator over ``UnsafePointer[T].alloc(1)``.
 
     Stateless — every method is ``@staticmethod``. The struct

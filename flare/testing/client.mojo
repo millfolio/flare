@@ -33,7 +33,7 @@ from flare.http.response import Response
 from flare.net import IpAddr, SocketAddr
 
 
-struct TestClient[H: Handler](ImplicitlyDestructible, Movable):
+struct TestClient[H: Handler](ImplicitlyDeletable, Movable):
     """Wraps a ``Handler`` and exposes per-method synth helpers.
 
     The handler is moved in at construction; subsequent calls

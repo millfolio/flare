@@ -207,7 +207,7 @@ def _parse_bool_param(s: String) raises -> Bool:
 # ── Extractor trait ─────────────────────────────────────────────────────────
 
 
-trait Extractor(Copyable, Defaultable, ImplicitlyDestructible, Movable):
+trait Extractor(Copyable, Defaultable, ImplicitlyDeletable, Movable):
     """Anything that can extract itself from a ``Request`` in place.
 
     ``Extracted[H]`` default-constructs the handler struct ``H`` and then
@@ -915,7 +915,7 @@ struct Json(Copyable, Defaultable, Extractor, Movable):
 # ── Extracted adapter ───────────────────────────────────────────────────────
 
 
-struct Extracted[H: Copyable & Defaultable & Handler & Movable](
+struct Extracted[H: Copyable & Defaultable & Handler](
     Copyable, Handler, Movable
 ):
     """Reflective auto-injection adapter: ``H``'s fields are its extractor set.

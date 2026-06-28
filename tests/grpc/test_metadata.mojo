@@ -49,7 +49,7 @@ def test_rejects_reserved_grpc_prefix() raises:
 
 
 def test_rejects_text_for_binary_key() raises:
-    """append_text() refuses to accept a key ending in -bin;
+    """Append_text() refuses to accept a key ending in -bin;
     callers must use append() with the raw bytes."""
     var m = GrpcMetadata()
     var raised = False

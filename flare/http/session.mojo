@@ -141,7 +141,7 @@ def signed_cookie_decode_keys(
 # ── SessionCodec: payload <-> bytes ───────────────────────────────────────
 
 
-trait SessionCodec(Copyable, Defaultable, ImplicitlyDestructible, Movable):
+trait SessionCodec(Copyable, Defaultable, ImplicitlyDeletable, Movable):
     """Encode / decode a typed payload to/from raw bytes.
 
     Implementations live alongside the user's payload type; the
