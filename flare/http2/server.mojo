@@ -499,11 +499,27 @@ struct H2Connection(Defaultable, Movable):
         return out^
 
     def take_completed_streams(self) -> List[Int]:
-        """Return stream ids whose request is fully buffered."""
+        """Return stream ids whose request is fully buffered AND not
+        yet dispatched.
+
+        A stream stays in ``conn.streams`` after the handler responds
+        (``emit_response`` advances it to ``CLOSED`` but does not remove
+        the entry, since flow-control bookkeeping still references it),
+        so we must exclude ``CLOSED`` streams or a second ``on_readable``
+        — e.g. when the client's connection preface / SETTINGS / GOAWAY
+        arrive across separate readable events under load — would re-emit
+        the same response, doubling it on the wire. This is most reliably
+        hit by the h2c-upgrade stream 1, which is born complete and lives
+        across multiple readable events.
+        """
         var ids = List[Int]()
         for entry in self.conn.streams.items():
             var s = entry.value.copy()
-            if s.headers_complete and s.data_complete:
+            if (
+                s.headers_complete
+                and s.data_complete
+                and s.state.value != StreamState.CLOSED().value
+            ):
                 ids.append(s.id)
         return ids^
 
