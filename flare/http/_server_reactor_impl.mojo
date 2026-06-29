@@ -1301,6 +1301,7 @@ struct ConnHandle(Movable):
             WsConnection,
             _compute_accept_srv,
             _send_upgrade_response,
+            spawn_ws_offload,
         )
         from flare.net.socket import RawSocket
         from flare.net._libc import AF_INET, SOCK_STREAM
@@ -1330,6 +1331,15 @@ struct ConnHandle(Movable):
         # Handshake (blocking), then hand off to the WS handler.
         _send_upgrade_response(stream, accept)
         var conn = WsConnection(stream^, peer, prebuf^)
+        if config.ws_offload:
+            # Off-reactor: run the connection on its own detached pthread so
+            # this worker's reactor returns immediately and keeps servicing
+            # every other connection (e.g. the unary HTTP API) instead of
+            # parking for the WebSocket's whole lifetime. The fd is already
+            # detached from the reactor and flipped to blocking mode, so the
+            # connection is owned end-to-end by that one thread.
+            spawn_ws_offload(conn^, config.ws_handler.value())
+            return True
         config.ws_handler.value()(conn)
         return True
 
