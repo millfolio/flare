@@ -134,6 +134,12 @@ struct HttpClient(Movable):
     ``https://`` always full-handshakes (the TLS-resumption work
     in Commit 04 keeps that handshake cheap)."""
 
+    var _recv_timeout_ms: Int
+    """Opt-in read timeout (``SO_RCVTIMEO``) applied to the connection AFTER connect,
+    so a body read that stalls (a half-open connection when the network drops) fails
+    with ``Timeout`` instead of blocking forever. ``0`` (default) = no read timeout,
+    preserving the historical behaviour. Set via :meth:`set_recv_timeout`."""
+
     def __init__(
         out self,
         base_url: String = "",
@@ -168,6 +174,7 @@ struct HttpClient(Movable):
         self._prefer_h2c = prefer_h2c
         self._h2c_upgrade = h2c_upgrade
         self._pool = ClientPool.disabled()
+        self._recv_timeout_ms = 0
 
     def __init__(
         out self,
@@ -189,6 +196,7 @@ struct HttpClient(Movable):
         self._prefer_h2c = prefer_h2c
         self._h2c_upgrade = h2c_upgrade
         self._pool = ClientPool.disabled()
+        self._recv_timeout_ms = 0
 
     def __init__[
         A: Auth
@@ -214,6 +222,7 @@ struct HttpClient(Movable):
         self._prefer_h2c = prefer_h2c
         self._h2c_upgrade = h2c_upgrade
         self._pool = ClientPool.disabled()
+        self._recv_timeout_ms = 0
 
     def __init__[
         A: Auth
@@ -239,6 +248,7 @@ struct HttpClient(Movable):
         self._prefer_h2c = prefer_h2c
         self._h2c_upgrade = h2c_upgrade
         self._pool = ClientPool.disabled()
+        self._recv_timeout_ms = 0
 
     def __del__(deinit self):
         """Free any pooled fds owned by this client.
@@ -593,6 +603,13 @@ struct HttpClient(Movable):
         )
         return self.send(req)
 
+    def set_recv_timeout(mut self, ms: Int):
+        """Bound body reads: after connect, set ``SO_RCVTIMEO`` = ``ms`` on the
+        connection so a stalled read fails with ``Timeout`` instead of hanging (e.g.
+        the network drops mid-response, leaving a half-open socket). ``0`` disables it
+        (the default). Connect stays bounded by ``timeout_ms`` separately."""
+        self._recv_timeout_ms = ms
+
     # ── Core ──────────────────────────────────────────────────────────────────
 
     def send(self, req: Request) raises -> Response:
@@ -738,6 +755,8 @@ struct HttpClient(Movable):
             var stream = TlsStream.connect_timeout(
                 u.host, u.port, tls_cfg^, self._timeout_ms
             )
+            if self._recv_timeout_ms > 0:
+                stream.set_recv_timeout(self._recv_timeout_ms)
             var negotiated = stream.alpn_selected()
             if negotiated == "h2":
                 var resp_h2 = _send_h2_over_tls(
@@ -762,6 +781,8 @@ struct HttpClient(Movable):
             var stream = _connect_with_fallback(
                 u.host, u.port, self._timeout_ms
             )
+            if self._recv_timeout_ms > 0:
+                stream.set_recv_timeout(self._recv_timeout_ms)
             if self._prefer_h2c:
                 # h2c via prior knowledge (RFC 9113 §3.4):
                 # send the connection preface immediately and
